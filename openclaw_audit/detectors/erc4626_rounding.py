@@ -27,14 +27,13 @@ DETECTOR_INFO = {
     "category": "erc4626",
 }
 
-# Functions that should use mulDivDown (round down for protocol safety)
+# Funciones que DEBEN redondear ABAJO (Floor) según el spec ERC-4626.
+# OJO: previewMint y previewWithdraw DEBEN redondear ARRIBA (Ceil) — NO van aquí (round-up es CORRECTO ahí).
 _SHOULD_ROUND_DOWN = {
-    "previewDeposit",
-    "previewMint",
-    "convertToShares",
-    "previewWithdraw",
-    "previewRedeem",
-    "convertToAssets",
+    "previewdeposit",
+    "converttoshares",
+    "previewredeem",
+    "converttoassets",
 }
 
 _ROUND_DOWN_PATTERN = re.compile(r"mulDivDown|Math\.floor|>>|/ \(|\.div\(", re.IGNORECASE)
@@ -69,6 +68,10 @@ def scan(repo_path: Path) -> list[dict]:
 
         for m in _FUNC_PATTERN.finditer(content):
             func_name = m.group(1)
+            # Solo las funciones del path deposit/redeem DEBEN redondear abajo. previewMint/previewWithdraw
+            # redondean ARRIBA por spec → un round-up ahí es CORRECTO, no lo marcamos (evita FP grave).
+            if func_name.lower() not in _SHOULD_ROUND_DOWN:
+                continue
             start_pos = m.start()
 
             # Find the function body (from opening brace to closing brace, simplified)

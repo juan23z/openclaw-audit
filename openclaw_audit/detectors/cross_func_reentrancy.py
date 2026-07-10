@@ -115,7 +115,8 @@ def _extract_function_bodies(content: str) -> list[dict]:
                     pos = i
                     break
         body = content[start:pos + 1]
-        functions.append({"name": name, "body": body, "start": m.start()})
+        sig = content[m.start():m.end()]  # firma con modificadores (nonReentrant va AQUÍ, no en el body)
+        functions.append({"name": name, "body": body, "sig": sig, "start": m.start()})
     return functions
 
 
@@ -147,8 +148,8 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
             body = func["body"]
             name = func["name"]
 
-            # Skip if this specific function has nonReentrant
-            if _REENTRANCY_GUARD.search(body):
+            # Skip if this specific function has nonReentrant (el modificador va en la FIRMA, no en el body)
+            if _REENTRANCY_GUARD.search(func.get("sig", "") + body):
                 continue
 
             # Find positions of external calls and state updates

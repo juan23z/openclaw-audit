@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+report/
+.env
+*.key
+*.pem
+*token*

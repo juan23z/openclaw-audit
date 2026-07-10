@@ -57,12 +57,39 @@ _ACCESS_MODIFIERS = re.compile(
     r"onlyDAO|onlyMultisig|onlyGuardian|onlyManager|requiresAuth|"
     r"authorized|restricted|authenticated|hasRole|isAdmin|isOwner|"
     r"ownerOnly|adminOnly|governanceOnly|whenNotPaused|"
-    r"onlyTrusted|onlyVault|onlyStrategist|onlyController)\b",
+    r"onlyTrusted|onlyVault|onlyStrategist|onlyController|"
+    # OpenZeppelin initialize protection (evita FP en initialize() de contratos upgradeables)
+    r"initializer|reinitializer|onlyInitializing)\b",
     re.IGNORECASE,
 )
 
 # Falsos positivos: funciones que se ven críticas pero son view o tienen protección no-modifier
 _VIEW_PATTERNS = re.compile(r"\b(view|pure)\b", re.IGNORECASE)
+
+# Auth INLINE dentro del body (no por modifier): require(msg.sender==owner), _checkOwner(), etc.
+_INLINE_AUTH = re.compile(
+    r"require\s*\(\s*msg\.sender\s*==|"
+    r"msg\.sender\s*==\s*(owner|_owner|admin|_admin|governance|manager)|"
+    r"_check(Owner|Role|Auth|Admin)|_authorizeUpgrade|_msgSender\(\)\s*==|"
+    r"if\s*\(\s*msg\.sender\s*!=",
+    re.IGNORECASE,
+)
+
+
+def _real_body(content: str, brace_pos: int) -> str:
+    """Extrae SOLO el body de la función (brace-matching), no 200 chars ciegos que capturan lo siguiente."""
+    if brace_pos == -1 or brace_pos >= len(content):
+        return ""
+    depth = 0
+    for i in range(brace_pos, min(len(content), brace_pos + 8000)):
+        c = content[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return content[brace_pos:i + 1]
+    return content[brace_pos:brace_pos + 400]
 
 
 def _extract_function_block(content: str, start_pos: int) -> str:
@@ -104,17 +131,17 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
         for pattern, impact_type in _HIGH_IMPACT_PATTERNS:
             for m in pattern.finditer(content):
                 func_start = m.start()
-                func_block = _extract_function_block(content, func_start)
 
-                # Skip view/pure functions
+                # Firma (con modificadores) y body REAL (brace-matching, no 200 chars ciegos)
                 func_sig_end = content.find("{", func_start)
                 func_sig = content[func_start:func_sig_end] if func_sig_end != -1 else content[func_start:func_start+200]
+                body = _real_body(content, func_sig_end)
 
                 if _VIEW_PATTERNS.search(func_sig):
                     continue
 
-                # Skip if there's an access control modifier
-                if _ACCESS_MODIFIERS.search(func_block):
+                # Protegida por MODIFIER (en la firma) o por AUTH INLINE (en su propio body)
+                if _ACCESS_MODIFIERS.search(func_sig) or _INLINE_AUTH.search(body):
                     continue
 
                 # Skip if it's in an interface or abstract

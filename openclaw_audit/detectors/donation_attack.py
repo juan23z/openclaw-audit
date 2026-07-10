@@ -39,10 +39,13 @@ _SHARE_CALC_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# Mitigation patterns — internal accounting variable tracked separately
+# Mitigation patterns — internal accounting variable tracked separately, o mitigaciones de inflación conocidas
 _MITIGATION_PATTERN = re.compile(
     r"totalAssets\(\)|_totalAssets\b|internalBalance\b|storedBalance\b|"
-    r"reserveBalance\b|_balance\b",
+    r"reserveBalance\b|_balance\b|"
+    # mitigaciones de donación/inflación estándar (OZ virtual shares, dead shares, empty-market guard)
+    r"_decimalsOffset|decimalsOffset|virtualShares|virtualAssets|MINIMUM_LIQUIDITY|"
+    r"totalSupply\s*\(?\s*\)?\s*==\s*0|_mint\s*\(\s*address\s*\(\s*0",
     re.IGNORECASE,
 )
 

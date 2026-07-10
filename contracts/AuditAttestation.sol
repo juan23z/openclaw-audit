@@ -20,12 +20,14 @@ contract AuditAttestation {
     }
 
     address public owner;
+    address public pendingOwner;                    // ownership en 2 pasos (evita bloqueo por typo)
     mapping(address => bool) public isAttester;     // auditores autorizados a atestar
     Attestation[] public attestations;
     mapping(bytes32 => uint256) public idByHash;    // reportHash => id (1-based; 0 = inexistente)
 
     event AttesterSet(address indexed attester, bool allowed);
     event Attested(uint256 indexed id, address indexed subject, bytes32 indexed reportHash, Verdict verdict, string uri);
+    event OwnershipTransferStarted(address indexed from, address indexed to);
     event OwnershipTransferred(address indexed from, address indexed to);
 
     error NotOwner();
@@ -53,11 +55,19 @@ contract AuditAttestation {
         emit AttesterSet(attester, allowed);
     }
 
-    /// @notice Transfiere la propiedad del contrato.
+    /// @notice Paso 1: el owner actual nomina un nuevo owner (no toma efecto hasta que lo acepte).
     function transferOwnership(address to) external onlyOwner {
         if (to == address(0)) revert ZeroAddress();
-        emit OwnershipTransferred(owner, to);
-        owner = to;
+        pendingOwner = to;
+        emit OwnershipTransferStarted(owner, to);
+    }
+
+    /// @notice Paso 2: el owner nominado acepta, completando la transferencia. Evita el bloqueo por typo.
+    function acceptOwnership() external {
+        if (msg.sender != pendingOwner) revert NotOwner();
+        emit OwnershipTransferred(owner, pendingOwner);
+        owner = pendingOwner;
+        pendingOwner = address(0);
     }
 
     /// @notice Registra una atestación para un informe entregado. Idempotente por reportHash.

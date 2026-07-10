@@ -5,3 +5,6 @@ report/
 *.key
 *.pem
 *token*
+contracts/lib/
+contracts/out/
+contracts/cache/

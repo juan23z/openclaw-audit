@@ -42,8 +42,15 @@ Want a **full manual review** with verified findings and a signed report? → **
 ## 🔗 On-chain attestation (optional)
 
 `contracts/AuditAttestation.sol` lets an auditor publish a `keccak256` hash of a delivered report + a verdict
-on-chain, so anyone can verify a report's authenticity and date (tamper-evidence + provenance). Deploy on any
-EVM testnet.
+on-chain, so anyone can verify a report's authenticity and date (tamper-evidence + provenance). Two-step
+ownership, access-controlled attesters, no external calls. Compiles with Solc 0.8.24 and ships with a Foundry
+test suite (**8 passing tests**):
+
+```bash
+cd contracts && forge install foundry-rs/forge-std && forge test
+```
+
+Deploy on any EVM testnet.
 
 ## License
 

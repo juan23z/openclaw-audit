@@ -31,14 +31,16 @@ def scan(repo_path: Path) -> list[dict]:
     sol_files = iter_sol_files(repo_path)
     findings: list[dict] = []
 
+    from openclaw_audit.detectors._fileutil import strip_comments
     for sol_file in sol_files[:60]:
         try:
             content = sol_file.read_text(errors="replace")
         except Exception:
             continue
+        code = strip_comments(content)   # no matchear tx.origin dentro de comentarios
         seen = set()
-        for m in _TXORIGIN_AUTH.finditer(content):
-            line_no = content[:m.start()].count("\n") + 1
+        for m in _TXORIGIN_AUTH.finditer(code):
+            line_no = code[:m.start()].count("\n") + 1
             if line_no in seen:
                 continue
             seen.add(line_no)

@@ -41,3 +41,27 @@ def iter_sol_files(repo_path, skip_tests: bool = True) -> list:
     except Exception:
         pass
     return found
+
+
+def strip_comments(src: str) -> str:
+    """Reemplaza comentarios // y /* */ por espacios PRESERVANDO longitud y saltos de línea (los números de
+    línea y offsets se mantienen). Evita FP de detectores que matchean código de EJEMPLO dentro de comentarios."""
+    out = []
+    i, n = 0, len(src)
+    while i < n:
+        two = src[i:i + 2]
+        if two == "//":
+            j = src.find("\n", i)
+            if j == -1:
+                j = n
+            out.append(" " * (j - i))
+            i = j
+        elif two == "/*":
+            j = src.find("*/", i + 2)
+            j = n if j == -1 else j + 2
+            out.append("".join("\n" if c == "\n" else " " for c in src[i:j]))
+            i = j
+        else:
+            out.append(src[i])
+            i += 1
+    return "".join(out)

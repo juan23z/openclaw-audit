@@ -30,19 +30,20 @@ def scan(repo_path: Path) -> list[dict]:
     sol_files = iter_sol_files(repo_path)
     findings: list[dict] = []
 
+    from openclaw_audit.detectors._fileutil import strip_comments
     for sol_file in sol_files[:60]:
         try:
             content = sol_file.read_text(errors="replace")
         except Exception:
             continue
+        code = strip_comments(content)   # matchear sobre código real, no ejemplos en comentarios
         seen_lines = set()
-        for m in _LOWLEVEL.finditer(content):
+        for m in _LOWLEVEL.finditer(code):
             kind = m.group(1).lower()
-            # inicio del statement: desde el ; o { anterior hasta el call
-            stmt_start = max(content.rfind(";", 0, m.start()), content.rfind("{", 0, m.start()))
-            prefix = content[stmt_start + 1:m.start()]
-            # comentario o import → saltar
-            line_no = content[:m.start()].count("\n") + 1
+            # inicio del statement: desde el ; o { anterior hasta el call (sobre 'code', sin comentarios)
+            stmt_start = max(code.rfind(";", 0, m.start()), code.rfind("{", 0, m.start()))
+            prefix = code[stmt_start + 1:m.start()]
+            line_no = code[:m.start()].count("\n") + 1
             if line_no in seen_lines:
                 continue
             # si el prefijo del statement indica que el retorno se captura/comprueba → OK

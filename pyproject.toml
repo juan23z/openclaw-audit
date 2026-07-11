@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openclaw-audit"
+version = "0.1.0"
+description = "Free heuristic Solidity security scanner — repo in, professional report out."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Nawel" }]
+keywords = ["solidity", "security", "audit", "web3", "smart-contracts", "static-analysis"]
+
+[project.urls]
+Homepage = "https://juan23z.github.io"
+Repository = "https://github.com/juan23z/openclaw-audit"
+
+[project.scripts]
+openclaw-audit = "scan:cli"
+
+[tool.setuptools]
+py-modules = ["scan"]
+packages = ["openclaw_audit", "openclaw_audit.detectors"]

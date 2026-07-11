@@ -13,6 +13,12 @@ python scan.py https://github.com/org/protocol --name "Protocol" --out ./report
 No dependencies beyond **Python 3.9+** and **git**. It clones (shallow), runs the detectors, writes the report,
 and cleans up after itself.
 
+**One command, no clone** (via [pipx](https://pipx.pypa.io)):
+```bash
+pipx run --spec git+https://github.com/juan23z/openclaw-audit openclaw-audit <repo-or-path> --out ./report
+```
+Or install it: `pipx install git+https://github.com/juan23z/openclaw-audit` → then just `openclaw-audit <repo>`.
+
 ## ⚡ Use it in CI (GitHub Action)
 
 Get a security scan on **every push and PR** — the report lands in the job summary + an artifact. Two lines:

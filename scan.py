@@ -71,5 +71,10 @@ def main(argv):
             shutil.rmtree(cleanup, ignore_errors=True)
 
 
+def cli():
+    """Console entry point (pip/pipx): `openclaw-audit <repo-or-path> [--name ...] [--out ...]`."""
+    main(sys.argv[1:])
+
+
 if __name__ == "__main__":
     main(sys.argv[1:])

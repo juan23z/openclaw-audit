@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Script, console2} from "forge-std/Script.sol";
-import {AuditAttestation} from "../src/AuditAttestation.sol";
+import {AuditAttestation} from "../AuditAttestation.sol";
 
 /// @notice Deploy AuditAttestation. Usage:
 ///   forge script script/Deploy.s.sol --rpc-url $RPC_URL --broadcast --private-key $PRIVATE_KEY

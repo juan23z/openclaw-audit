@@ -8,3 +8,7 @@ report/
 contracts/lib/
 contracts/out/
 contracts/cache/
+build/
+dist/
+*.egg-info/
+__pycache__/

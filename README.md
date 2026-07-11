@@ -61,6 +61,12 @@ change)? → **https://juan23z.github.io**
 Detectors skip dependencies and tests (`node_modules`, `lib`, `out`, `test`, `mock`, …) so you only get
 findings in **your** code.
 
+## ✅ Calibrated, not noisy
+
+Runs clean on clean code: **0 findings across the entire OpenZeppelin contracts library** (the most-audited
+codebase in web3). Detectors skip comments, tests and dependencies — so you get signal, not a wall of false
+positives.
+
 ## ⚠️ Honest by design
 
 These are **heuristic candidates**, not confirmed vulnerabilities. Static heuristics produce false positives —

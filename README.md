@@ -13,6 +13,28 @@ python scan.py https://github.com/org/protocol --name "Protocol" --out ./report
 No dependencies beyond **Python 3.9+** and **git**. It clones (shallow), runs the detectors, writes the report,
 and cleans up after itself.
 
+## ⚡ Use it in CI (GitHub Action)
+
+Get a security scan on **every push and PR** — the report lands in the job summary + an artifact. Two lines:
+
+```yaml
+# .github/workflows/security.yml
+name: security
+on: [push, pull_request]
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: juan23z/openclaw-audit@v1
+        with:
+          path: contracts        # optional, default '.'
+          # fail-on-candidates: true   # optional, default false (heuristics are advisory)
+```
+
+That's it — no API keys, no cost. Want verified findings + **continuous monitoring** (re-audited on every
+change)? → **https://juan23z.github.io**
+
 ## What it checks (11 detectors)
 
 | # | Detector | Looks for |

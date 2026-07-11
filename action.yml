@@ -1,0 +1,60 @@
+name: 'OpenClaw Audit'
+description: 'Free heuristic Solidity security scan — get a report on every push / PR. No API keys, no cost.'
+author: 'Nawel (juan23z)'
+branding:
+  icon: 'shield'
+  color: 'purple'
+
+inputs:
+  path:
+    description: 'Path to scan (relative to your repo root)'
+    required: false
+    default: '.'
+  name:
+    description: 'Project name shown in the report'
+    required: false
+    default: ''
+  fail-on-candidates:
+    description: 'Fail the job if any candidate observation is found (default false — heuristics are advisory)'
+    required: false
+    default: 'false'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Run OpenClaw Audit
+      shell: bash
+      run: |
+        set -e
+        OUT="$RUNNER_TEMP/openclaw-report"
+        NAME="${{ inputs.name }}"
+        [ -z "$NAME" ] && NAME="${{ github.repository }}"
+        python "${{ github.action_path }}/scan.py" "${{ inputs.path }}" --name "$NAME" --out "$OUT"
+        {
+          echo "## 🛡️ OpenClaw Audit — heuristic Solidity security scan"
+          echo ""
+          echo "> Heuristic candidates — verify before acting. Want a full manual review + continuous monitoring? https://juan23z.github.io"
+          echo ""
+          cat "$OUT/report.md"
+        } >> "$GITHUB_STEP_SUMMARY"
+        # Contar observaciones para la salida / posible fail
+        N=$(grep -cE '^### [0-9]' "$OUT/report.md" || true)
+        echo "candidates=$N" >> "$GITHUB_OUTPUT"
+        echo "OpenClaw Audit: $N candidate observation(s). Full report in the job summary + artifact."
+        if [ "${{ inputs.fail-on-candidates }}" = "true" ] && [ "$N" -gt 0 ]; then
+          echo "::error::OpenClaw Audit found $N candidate observation(s) and fail-on-candidates is enabled."
+          exit 1
+        fi
+
+    - name: Upload report artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: openclaw-audit-report
+        path: ${{ runner.temp }}/openclaw-report/
+        if-no-files-found: warn

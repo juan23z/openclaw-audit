@@ -194,11 +194,121 @@ def _call_deepseek(prompt: str) -> str:
         return ""
 
 
+# ── Heurístico SIN LLM (corre para todos; DeepSeek abajo es una mejora opcional) ────────────────
+# Patrón de alta precisión: el NatSpec de una función external/public AFIRMA una restricción de acceso
+# ("only the owner can…", "can only be called by…") pero la función NO tiene modificador de acceso NI
+# guard de msg.sender → contradicción doc-vs-código real. Conservador a propósito (proteger 0-FP).
+_ACCESS_CLAIM = re.compile(
+    r"\bonly\s+(?:the\s+|an?\s+)?(?:owner|admin|administrator|governance|governor|operator|"
+    r"manager|controller|keeper|guardian|dao|council|timelock|multisig)\b"
+    r"|\bcan only be called by\b|\bcallable only by\b|\brestricted to (?:the\s+)?(?:owner|admin|governance)\b"
+    r"|\bmust be (?:the\s+)?(?:owner|admin|governance)\b",
+    re.IGNORECASE)
+_ACCESS_MOD = re.compile(r"\b(only[A-Z]\w*|onlyRole|requiresAuth|restricted|authoriz\w*|auth|isOwner)\b")
+_GUARD = re.compile(
+    r"\bmsg\.sender\b|_msgSender\(\)|\btx\.origin\b|_checkOwner|_checkRole|\bhasRole\s*\(|"
+    r"\bowner\s*\(\)|onlyRole|_authorizeUpgrade|accessControl|\bgovernance\b|\bcaller\s*\(\s*\)",
+    re.IGNORECASE)  # caller() = el msg.sender de Yul/assembly (solady et al. guardan acceso en assembly)
+_FUNC = re.compile(r"function\s+(\w+)\s*\([^)]*\)([^;{]*)(\{|;)")
+
+
+def _doc_before(src: str, start: int) -> str:
+    """Devuelve el bloque de comentario NatSpec inmediatamente encima de la función (o '')."""
+    lines = src[:start].split("\n")
+    doc, i = [], len(lines) - 2  # -2: salta la línea (indentación) donde arranca 'function'
+    while i >= 0:
+        s = lines[i].strip()
+        if s.startswith("///") or s.startswith("//") or s.startswith("*"):
+            doc.append(s); i -= 1
+        elif s.endswith("*/"):
+            doc.append(s); i -= 1
+            while i >= 0 and "/*" not in lines[i]:
+                doc.append(lines[i].strip()); i -= 1
+            if i >= 0:
+                doc.append(lines[i].strip())
+            break
+        else:
+            break
+    return " ".join(reversed(doc))
+
+
+def _body(src: str, i: int) -> str:
+    """Cuerpo por emparejamiento de llaves desde la posición del '{'."""
+    depth = 0
+    for j in range(i, min(len(src), i + 20000)):
+        if src[j] == "{":
+            depth += 1
+        elif src[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[i:j + 1]
+    return src[i:i + 2000]
+
+
+def _heuristic_scan(repo_path: Path, contest_id: str = "") -> list[dict]:
+    from openclaw_audit.detectors._fileutil import iter_sol_files
+    findings, seen = [], set()
+    for f in iter_sol_files(repo_path):
+        try:
+            src = f.read_text(errors="replace")
+        except Exception:
+            continue
+        # Pasada 1: mapa de funciones + conjunto de las que SÍ tienen guard (para detectar delegación).
+        funcs, guarded = [], set()
+        for m in _FUNC.finditer(src):
+            if m.group(3) != "{":  # sin cuerpo (interfaz/abstracta) → no aplica
+                continue
+            name, mid = m.group(1), m.group(2)
+            body = _body(src, m.end() - 1)
+            funcs.append((m.start(), name, mid, body))
+            if _ACCESS_MOD.search(mid) or _GUARD.search(mid + body):
+                guarded.add(name)
+        # Pasada 2: flaggear solo external/public que mutan, con claim de acceso y SIN guard propio NI delegado.
+        for start, name, mid, body in funcs:
+            if not re.search(r"\b(external|public)\b", mid):   # solo lo llamable por cualquiera
+                continue
+            if re.search(r"\b(view|pure)\b", mid):             # sin cambio de estado → no es riesgo de fondos
+                continue
+            doc = _doc_before(src, start)
+            if not _ACCESS_CLAIM.search(doc):                  # el doc NO promete acceso restringido → skip
+                continue
+            if _ACCESS_MOD.search(mid) or _GUARD.search(mid + body):  # hay ALGÚN control → conservador: skip
+                continue
+            # Delegación: si el cuerpo llama a otra función guardada del mismo fichero (p.ej. safeTransferFrom
+            # → transferFrom, o upgrade → upgradeAndCall), el control existe una llamada más abajo → no es FP.
+            if any(g != name and re.search(r"\b" + re.escape(g) + r"\s*\(", body) for g in guarded):
+                continue
+            key = (f.name, name)
+            if key in seen:
+                continue
+            seen.add(key)
+            claim = _ACCESS_CLAIM.search(doc).group(0)
+            findings.append({
+                "id": str(uuid.uuid4()), "contest_id": contest_id,
+                "title": f"Doc claims access control the code doesn't enforce: {name}()",
+                "description": (
+                    f"The NatSpec of `{name}()` states an access restriction (\"{claim}\") but the function is "
+                    f"`external`/`public` and has **no access modifier and no `msg.sender` check** in its body. "
+                    f"Either the documentation is misleading or the guard is missing — verify against intent."),
+                "severity": "MEDIUM", "category": "specification_violation",
+                "affected_code": f"{name}() in {f.name}", "confidence": 0.55,
+                "recommendation": ("If the function should be restricted, add the intended modifier "
+                                   "(e.g. `onlyOwner`) or an explicit `require(msg.sender == …)`. If it is meant "
+                                   "to be public, correct the NatSpec so it doesn't imply a nonexistent guard."),
+                "source": "natspec_verifier_heuristic",
+            })
+    return findings[:20]
+
+
 def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
     """
     Escanea el repo buscando contradicciones entre documentación y código.
-    Retorna findings en formato OpenClaw.
+    Corre SIEMPRE el heurístico (sin coste, sin API key); si hay DEEPSEEK_API_KEY, añade el análisis
+    LLM (más profundo) y deduplica por función. Retorna findings en formato OpenClaw.
     """
+    heur = _heuristic_scan(repo_path, contest_id)
+    if not DEEPSEEK_API_KEY:
+        return heur
     docs = _read_docs(repo_path)
     code, filenames = _read_main_contracts(repo_path)
 
@@ -265,4 +375,10 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
         })
         _logger.info("[NatspecVerifier] %s: %s (conf=%.2f)", sev, v.get("claim", "")[:60], conf)
 
+    # Fusiona con el heurístico (dedup por función afectada; la del LLM, más rica, gana).
+    llm_fns = {re.sub(r"\W", "", (f.get("affected_code") or "").split(" in ")[0]).lower() for f in findings}
+    for h in heur:
+        fn = re.sub(r"\W", "", (h.get("affected_code") or "").split(" in ")[0]).lower()
+        if fn not in llm_fns:
+            findings.append(h)
     return findings

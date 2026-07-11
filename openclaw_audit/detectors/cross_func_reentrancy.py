@@ -48,13 +48,15 @@ _EXTERNAL_CALL = re.compile(
     r"\.call\s*\{|"
     r"\.call\s*\(|"
     r"IERC20\w*\([^)]+\)\.\w+\(|"
-    r"I\w+\([^)]+\)\.\w+\(|"
+    r"I[A-Z]\w*\([^)]+\)\.\w+\(|"   # interfaz `IFoo(x).y(`: I + MAYÚSCULA. Excluye custom errors `Invalid...(`
     r"safeTransfer\s*\(|"
     r"safeTransferFrom\s*\(|"
     r"\.swap\s*\(|"
     r"\.flashLoan\s*\("
     r")",
-    re.IGNORECASE,
+    # SIN IGNORECASE a propósito: Solidity es case-sensitive. Las interfaces son `IFoo(...)` (I mayúscula);
+    # los casts de tipo son minúscula (`int48(...)`, `uint256(...)`). Con IGNORECASE, `I\w+(...)` matcheaba
+    # `int48(bytes32(x).extract(` como si fuera una llamada externa → FP en funciones puras (OZ ERC4337Utils).
 )
 
 # State variable updates (assignments to storage)
@@ -97,8 +99,11 @@ _REENTRANCY_GUARD = re.compile(
 def _extract_function_bodies(content: str) -> list[dict]:
     """Extract function name + body for analysis."""
     functions = []
+    # [^{;]* (no [^{]*): una declaración de interfaz/abstracta termina en `;` SIN cuerpo. Con [^{]* el
+    # motor cruzaba el `;` hasta la `{` del siguiente contrato/library y capturaba un "cuerpo" falso (p.ej.
+    # las constantes de la library) → FP. Con [^{;]* esas declaraciones sin cuerpo dejan de matchear.
     func_pattern = re.compile(
-        r"function\s+(\w+)\s*\([^)]*\)[^{]*\{", re.MULTILINE
+        r"function\s+(\w+)\s*\([^)]*\)[^{;]*\{", re.MULTILINE
     )
     for m in func_pattern.finditer(content):
         name = m.group(1)
@@ -118,6 +123,36 @@ def _extract_function_bodies(content: str) -> list[dict]:
         sig = content[m.start():m.end()]  # firma con modificadores (nonReentrant va AQUÍ, no en el body)
         functions.append({"name": name, "body": body, "sig": sig, "start": m.start()})
     return functions
+
+
+_COND = re.compile(r"\b(?:require|assert|revert|if|while)\s*\(")
+
+# Métodos claramente de LECTURA (view/staticcall): un `IFoo(x).supportsY(...)` o `token.balanceOf(...)` NO
+# entrega control a un atacante → no es la "interacción" que dispara reentrancy. Filtrarlos evita FP
+# (p.ej. OZ: sanity-check `supportsAttribute`, y un `view` que solo lee `balanceOf(this)`).
+_VIEWISH = re.compile(
+    r"\.(?:supports\w*|is[A-Z]\w*|get[A-Z]\w*|has[A-Z]\w*|balanceOf|totalSupply|totalAssets|"
+    r"decimals|symbol|allowance|preview[A-Z]\w*|convertTo\w*|latestRoundData|latestAnswer)\s*\(")
+
+
+def _condition_spans(body: str) -> list[tuple]:
+    """Rangos (inicio,fin) de las CONDICIONES require()/if()/assert()/... por emparejamiento de paréntesis.
+    Una llamada externa dentro de un `require(IFoo(x).check())` es un check (view/staticcall), NO la
+    'interacción' de CEI → no debe contar como la llamada que dispara reentrancy (evita FP tipo OZ _installModule,
+    que hace state-writes y deja el `onInstall` real correctamente al final)."""
+    spans = []
+    for m in _COND.finditer(body):
+        i = m.end() - 1  # en '('
+        depth = 0
+        for j in range(i, len(body)):
+            if body[j] == "(":
+                depth += 1
+            elif body[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    spans.append((m.start(), j))
+                    break
+    return spans
 
 
 def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
@@ -147,13 +182,24 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
         for func in functions:
             body = func["body"]
             name = func["name"]
+            sig = func.get("sig", "")
+            is_pure = bool(re.search(r"\bpure\b", sig))
+            is_view = bool(re.search(r"\bview\b", sig))
 
-            # Skip if this specific function has nonReentrant (el modificador va en la FIRMA, no en el body)
-            if _REENTRANCY_GUARD.search(func.get("sig", "") + body):
+            # Una función pure no lee ni escribe estado → no puede ser NINGÚN tipo de reentrancy. Fuera.
+            if is_pure:
                 continue
 
-            # Find positions of external calls and state updates
-            ext_calls = [(m.start(), m.group()) for m in _EXTERNAL_CALL.finditer(body)]
+            # Skip if this specific function has nonReentrant (el modificador va en la FIRMA, no en el body)
+            if _REENTRANCY_GUARD.search(sig + body):
+                continue
+
+            # Find positions of external calls and state updates. Excluye llamadas dentro de condiciones
+            # require()/if() (checks view, no la 'interacción' de CEI).
+            cond_spans = _condition_spans(body)
+            in_cond = lambda p: any(a <= p <= b for a, b in cond_spans)
+            ext_calls = [(m.start(), m.group()) for m in _EXTERNAL_CALL.finditer(body)
+                         if not in_cond(m.start()) and not _VIEWISH.search(m.group())]
             state_updates = [(m.start(), m.group()) for m in _STATE_UPDATE.finditer(body)]
             crit_reads = [(m.start(), m.group()) for m in _CRITICAL_READ.finditer(body)]
 
@@ -162,9 +208,10 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
 
             first_ext_call = ext_calls[0][0]
 
-            # Pattern 1: External call BEFORE state update (classic CEI violation)
+            # Pattern 1: External call BEFORE state update (classic CEI violation). Una función view no
+            # escribe estado → cualquier "=" es a una variable local (FP); solo aplica a funciones que mutan.
             late_updates = [u for u in state_updates if u[0] > first_ext_call]
-            if late_updates and not has_guard:
+            if late_updates and not has_guard and not is_view:
                 # Check if the late update is significant (not just local var)
                 significant = [u for u in late_updates
                                if not re.match(r"\s*(?:uint|int|bool|address|bytes)\w*\s+", u[1])]

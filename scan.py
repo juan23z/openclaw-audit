@@ -2,7 +2,7 @@
 """
 OpenClaw Audit — free heuristic Solidity security scanner.
 
-Scan a Solidity repo (git URL or local path) with 11 heuristic detectors and get a professional
+Scan a Solidity repo (git URL or local path) with 12 heuristic detectors and get a professional
 report (Markdown + HTML). Findings are CANDIDATES — verify before acting.
 
 Usage:

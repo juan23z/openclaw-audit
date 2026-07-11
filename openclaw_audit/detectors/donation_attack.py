@@ -52,14 +52,14 @@ _MITIGATION_PATTERN = re.compile(
 
 def scan(repo_path: Path) -> list[dict]:
     """Standalone scan — returns findings list in OpenClaw format."""
-    from openclaw_audit.detectors._fileutil import iter_sol_files
+    from openclaw_audit.detectors._fileutil import iter_sol_files, strip_comments
     sol_files = iter_sol_files(repo_path)
 
     findings: list[dict] = []
 
     for sol_file in sol_files:
         try:
-            content = sol_file.read_text(errors="replace")
+            content = strip_comments(sol_file.read_text(errors="replace"))
         except Exception:
             continue
 

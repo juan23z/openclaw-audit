@@ -35,7 +35,7 @@ jobs:
 That's it — no API keys, no cost. Want verified findings + **continuous monitoring** (re-audited on every
 change)? → **https://juan23z.github.io**
 
-## What it checks (11 detectors)
+## What it checks (12 detectors)
 
 | # | Detector | Looks for |
 |---|----------|-----------|
@@ -48,8 +48,9 @@ change)? → **https://juan23z.github.io**
 | 7 | Fee-on-transfer | Unhandled fee/rebasing token assumptions |
 | 8 | Precision loss | Division before multiplication |
 | 9 | ERC compliance | ERC-20 / 4626 conformance gaps |
-| 10 | First-depositor / precision variants | Edge cases in vault math |
-| 11 | NatSpec | Missing docs on critical functions |
+| 10 | NatSpec | Missing docs on critical functions |
+| 11 | **Unchecked low-level call** | `call`/`send`/`delegatecall` return value ignored |
+| 12 | **tx.origin auth** | `tx.origin` used for authorization (phishing vector) |
 
 Detectors skip dependencies and tests (`node_modules`, `lib`, `out`, `test`, `mock`, …) so you only get
 findings in **your** code.

@@ -30,6 +30,11 @@ _DETECTORS = [
     # implementadas con las firmas y semánticas correctas (return bool, no devolver
     # address(0), rounding correcto en ERC4626, etc.).
     ("erc_compliance",           "openclaw_audit.detectors.erc_compliance"),
+    # ── Detectores v4.8 (11-jul) — más cobertura de clases de bug de alto valor ──
+    # Low-level call/send/delegatecall con return ignorado (no revierte en fallo → fallo silencioso).
+    ("unchecked_call",           "openclaw_audit.detectors.unchecked_call"),
+    # tx.origin usado para autorización (vector de phishing clásico; debe ser msg.sender).
+    ("tx_origin_auth",           "openclaw_audit.detectors.tx_origin_auth"),
 ]
 
 

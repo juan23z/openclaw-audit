@@ -124,7 +124,7 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
     """
     Detecta patrones de cross-function y read-only reentrancy.
     """
-    from openclaw_audit.detectors._fileutil import iter_sol_files
+    from openclaw_audit.detectors._fileutil import iter_sol_files, strip_comments
     sol_files = [f for f in iter_sol_files(repo_path) if "interface" not in str(f).lower()]
 
     if not sol_files:
@@ -134,7 +134,7 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
 
     for sol_file in sol_files[:20]:
         try:
-            content = sol_file.read_text(errors="replace")
+            content = strip_comments(sol_file.read_text(errors="replace"))  # no extraer funciones de NatSpec/comentarios
         except Exception:
             continue
 

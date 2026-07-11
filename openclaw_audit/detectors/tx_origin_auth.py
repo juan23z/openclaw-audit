@@ -25,6 +25,10 @@ _TXORIGIN_AUTH = re.compile(
     re.IGNORECASE,
 )
 
+# BENIGNO: `msg.sender == tx.origin` (o !=) es el idiom "rechaza llamadas de contratos" — NO es autorización
+# contra un principal (owner/admin), no es phishing-able. No debe marcarse.
+_BENIGN_ORIGIN = re.compile(r"tx\.origin\s*[!=]=\s*msg\.sender|msg\.sender\s*[!=]=\s*tx\.origin", re.IGNORECASE)
+
 
 def scan(repo_path: Path) -> list[dict]:
     from openclaw_audit.detectors._fileutil import iter_sol_files
@@ -40,6 +44,9 @@ def scan(repo_path: Path) -> list[dict]:
         code = strip_comments(content)   # no matchear tx.origin dentro de comentarios
         seen = set()
         for m in _TXORIGIN_AUTH.finditer(code):
+            # Salta el patrón anti-contrato `msg.sender == tx.origin` (benigno, no auth-bypass).
+            if _BENIGN_ORIGIN.search(code[max(0, m.start() - 40): m.end() + 40]):
+                continue
             line_no = code[:m.start()].count("\n") + 1
             if line_no in seen:
                 continue

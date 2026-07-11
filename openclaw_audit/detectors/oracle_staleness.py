@@ -79,19 +79,18 @@ def scan(repo_path: Path) -> list[dict]:
             ctx_end = min(len(lines), line_no + _CONTEXT_WINDOW)
             context = "\n".join(lines[ctx_start:ctx_end])
 
-            missing: list[str] = []
+            # Disparo SOLO por el check de staleness (el crítico y detectable de forma robusta vía
+            # updatedAt/block.timestamp/heartbeat). Los otros dos dependen de nombres exactos de variable
+            # (answer/answeredInRound/roundId) → FP en cuanto el dev los renombra; además answeredInRound
+            # está DEPRECADO por Chainlink. Si hay staleness check, confiamos en la integración (no FP).
+            if _STALENESS_CHECK.search(context):
+                continue
 
-            if not _STALENESS_CHECK.search(context):
-                missing.append("updatedAt staleness check")
-
-            if not _ROUND_CHECK.search(context):
-                missing.append("answeredInRound >= roundId check")
-
+            missing: list[str] = ["updatedAt staleness check"]
             if not _PRICE_CHECK.search(context):
                 missing.append("answer > 0 validity check")
-
-            if not missing:
-                continue
+            if not _ROUND_CHECK.search(context):
+                missing.append("answeredInRound >= roundId check (secondary; deprecated by Chainlink)")
 
             # Deduplicate per file (one finding per file to avoid noise)
             if file_key in seen_files:

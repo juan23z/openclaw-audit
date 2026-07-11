@@ -91,7 +91,8 @@ _CALLBACK_FUNCS = re.compile(
 
 # ReentrancyGuard usage
 _REENTRANCY_GUARD = re.compile(
-    r"\b(nonReentrant|ReentrancyGuard|noReentrancy|reentrancyLock|_locked|_notEntered)\b",
+    r"\b(nonReentrant|ReentrancyGuard|noReentrancy|reentrancyLock|_locked|_notEntered|"
+    r"lock|unlocked|mutex|locked|_status|_entered|globalLock)\b",  # lock/unlocked = el guard clásico de Uniswap
     re.IGNORECASE,
 )
 

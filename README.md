@@ -38,8 +38,8 @@ jobs:
           # fail-on-candidates: true   # optional, default false (heuristics are advisory)
 ```
 
-That's it — no API keys, no cost. Want verified findings + **continuous monitoring** (re-audited on every
-change)? → **https://juan23z.github.io**
+That's it — no API keys, no cost. Want **verified findings + continuous monitoring** (re-audited on every
+change)? Get a human audit → **[order on Fiverr](https://www.fiverr.com/s/P2kNDP0)** · [sample report & service](https://juan23z.github.io)
 
 ## What it checks (12 detectors)
 

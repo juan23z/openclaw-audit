@@ -90,7 +90,7 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
     """
     Detecta pérdida de precisión por división antes de multiplicación.
     """
-    from openclaw_audit.detectors._fileutil import iter_sol_files
+    from openclaw_audit.detectors._fileutil import iter_sol_files, MAX_SCAN_FILES
     sol_files = [f for f in iter_sol_files(repo_path) if "interface" not in str(f).lower()]
 
     if not sol_files:
@@ -99,7 +99,7 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
     findings = []
     seen = set()  # Deduplicate by (file, function)
 
-    for sol_file in sol_files[:20]:
+    for sol_file in sol_files[:MAX_SCAN_FILES]:
         try:
             content = sol_file.read_text(errors="replace")
         except Exception:
@@ -111,6 +111,13 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
             line_start = content.rfind("\n", 0, m.start())
             line = content[line_start:m.end()].strip()
             if line.startswith("//") or line.startswith("*"):
+                continue
+
+            # 19-jul: `A / B * B` (mismo operando dividido y luego multiplicado) es un REDONDEO INTENCIONAL a un
+            # múltiplo de B (floor-to-unit), no pérdida de precisión: `tick / tickSpacing * tickSpacing` (alinear a
+            # tick), `x / 2 * 2` (forzar par). Un bug real es `A / B * C` con C != B. → si divisor == multiplicador,
+            # saltar (FP). Verificado en Uniswap tick-align + Velodrome art (ambos FP).
+            if m.group(2) == m.group(3):
                 continue
 
             func_name = _get_function_name(content, m.start())

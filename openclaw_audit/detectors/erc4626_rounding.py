@@ -36,8 +36,16 @@ _SHOULD_ROUND_DOWN = {
     "converttoassets",
 }
 
-_ROUND_DOWN_PATTERN = re.compile(r"mulDivDown|Math\.floor|>>|/ \(|\.div\(", re.IGNORECASE)
-_ROUND_UP_PATTERN = re.compile(r"mulDivUp|Math\.ceil|\+\s*1\b|\.add\(1\)|roundUp", re.IGNORECASE)
+# Round-DOWN (correcto en estas funciones). Incluye las libs que redondean ABAJO por defecto: fullMulDiv/mulDiv
+# (Solady), mulDivDown (Solmate), mulWad/divWad, y el floor genérico. 19-jul: sin esto, un vault CORRECTO con
+# fullMulDiv salía como FP.
+_ROUND_DOWN_PATTERN = re.compile(
+    r"mulDivDown|fullMulDiv|mulDiv\b(?!Up)|Math\.floor|floorDiv|mulWad\b|divWad\b|>>|/ \(|\.div\(",
+    re.IGNORECASE)
+# Round-UP (INCORRECTO en estas funciones): SOLO marcadores EXPLÍCITOS de ceil. 19-jul FIX CRÍTICO: se quitó
+# `\+\s*1` — matcheaba la MITIGACIÓN de virtual-shares (`totalSupply()+1`, OZ/EIP-4626 correcta), no un round-up →
+# FPeaba TODO vault correcto con virtual shares (Solady 8 FPs). Un ceil real usa mulDivUp/ceilDiv/roundUp/divUp.
+_ROUND_UP_PATTERN = re.compile(r"mulDivUp|ceilDiv|\bdivUp\b|mulWadUp|roundUp|Math\.ceil", re.IGNORECASE)
 
 # ERC4626 function signature pattern
 _FUNC_PATTERN = re.compile(

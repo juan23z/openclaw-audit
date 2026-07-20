@@ -53,11 +53,11 @@ _HIGH_IMPACT_PATTERNS = [
 
 # Modificadores que indican acceso restringido
 _ACCESS_MODIFIERS = re.compile(
-    r"\b(onlyOwner|onlyAdmin|onlyRole|onlyGovernor|onlyKeeper|onlyOperator|"
-    r"onlyDAO|onlyMultisig|onlyGuardian|onlyManager|requiresAuth|"
-    r"authorized|restricted|authenticated|hasRole|isAdmin|isOwner|"
-    r"ownerOnly|adminOnly|governanceOnly|whenNotPaused|"
-    r"onlyTrusted|onlyVault|onlyStrategist|onlyController|"
+    r"\b(only[A-Za-z]\w+|"                # GENÉRICO: onlyOwner/onlyTimelock/onlyGovernance/onlyVault/… (16-jul)
+    r"requiresAuth|authoriz\w*|restricted|authenticated|hasRole|isAdmin|isOwner|"
+    r"ownerOnly|adminOnly|governanceOnly|whenNotPaused|permissioned|gated|"
+    # modifiers custom tipo checkAccess()/_checkRole()/checkOwner() — el FP CRITICAL de Cap (16-jul) era esto:
+    r"checkAccess|checkOwner|checkRole|checkCaller|checkAuth|_check[A-Za-z]\w+|"
     # OpenZeppelin initialize protection (evita FP en initialize() de contratos upgradeables)
     r"initializer|reinitializer|onlyInitializing)\b",
     re.IGNORECASE,
@@ -71,9 +71,99 @@ _INLINE_AUTH = re.compile(
     r"require\s*\(\s*msg\.sender\s*==|"
     r"msg\.sender\s*==\s*(owner|_owner|admin|_admin|governance|manager)|"
     r"_check(Owner|Role|Auth|Admin)|_authorizeUpgrade|_msgSender\(\)\s*==|"
-    r"if\s*\(\s*msg\.sender\s*!=",
+    r"if\s*\(\s*msg\.sender\s*!=|"
+    # 20-jul: OPERANDO INVERTIDO — `require(HUB == msg.sender)` / `if (HUB != msg.sender) revert`. La auth
+    # compara un CONST/immutable contra el caller con msg.sender a la DERECHA (patrón de Aave V4: OnlyHub,
+    # OnlyReinvestmentController). Solo veíamos msg.sender a la izquierda → 2 FP en el contest de Aave. Comparar
+    # algo contra msg.sender es, en la práctica, SIEMPRE un gate de caller.
+    r"[!=]=\s*msg\.sender\b|[!=]=\s*_msgSender\(\)|"
+    # 20-jul: AUTH DELEGADA A HELPER — `_validateSweep(asset, msg.sender, amount)`. La función crítica pasa
+    # msg.sender a un helper con nombre de validador (_validate/_check/_authorize/_assert/_verify/_ensure/_require),
+    # que hace el gate dentro. El check de body-only no lo veía → FP de `Hub.sweep()` en Aave V4. Gated por el
+    # PREFIJO-verbo del helper para no sobre-suprimir un `_recordDeposit(msg.sender,…)` cualquiera.
+    r"_(?:validate|check|authorize|assert|verify|ensure|require|only)[A-Za-z]*\s*\([^;{}]*msg\.sender|"
+    # Auth INLINE por VARIABLE LOCAL: `address sender=_msgSender(); if(sender!=guardian && sender!=governance) revert…`
+    # (17-jul: los 2 pause() de VeriSphere eran esto — el detector solo veía `msg.sender` directo). 3 señales:
+    r"if\s*\(\s*(sender|caller|_sender|_caller|msgsender|_msgsender)\s*[!=]=|"            # (1) if(sender != …)
+    r"[!=]=\s*(guardian|governance|authority|_guardian|_governance|controller|operator)\b|"  # (2) comparación contra un ROL
+    r"revert\s+Not\w*(Guardian|Governance|Owner|Admin|Author|Allowed|Permitted|Role|Whitelist)|"  # (3) revert de AUTH
+    # (4) 19-jul: AUTH EN ASSEMBLY (código gas-optimizado tipo Solady): `if iszero(eq(sload(admin), caller()))`.
+    # `caller()` (Yul = msg.sender) dentro de una comparación (eq/iszero/sub/xor), en CUALQUIER posición del arg,
+    # = control de acceso. Cazó el FP de `ERC1967Factory.upgrade`/`upgradeAndCall` de Solady.
+    r"(?:eq|iszero|sub|xor|lt|gt)\s*\([^{}]{0,80}caller\(\)|caller\(\)\s*[!=]=",
     re.IGNORECASE,
 )
+
+# Destino de una transferencia de fondos (primer arg de transfer/safeTransfer/send, o `X.call{value:}`).
+# OJO con el orden de la alternación: `msg\.sender|tx\.origin` VAN ANTES que `[A-Za-z_]\w*`, si no el
+# genérico matchea `msg` (corta en el punto) y leeríamos el destino como "msg" → falso "seguro" → se
+# suprimiría un sweep a msg.sender REAL (bug cazado a mano el 16-jul en el control test).
+_TRANSFER_DEST = re.compile(
+    r"\.(?:safeTransfer|transfer|send)\s*\(\s*(payable\s*\(\s*)?(msg\.sender|tx\.origin|[A-Za-z_]\w*)|"
+    r"(msg\.sender|tx\.origin|[A-Za-z_]\w*)\s*\.\s*call\s*[{(]",
+    re.IGNORECASE,
+)
+
+
+def _func_params(func_sig: str) -> set[str]:
+    """Nombres de los parámetros de la función (último token de cada parte entre paréntesis)."""
+    m = re.search(r"\(([^)]*)\)", func_sig)
+    if not m:
+        return set()
+    params = set()
+    for part in m.group(1).split(","):
+        toks = re.findall(r"[A-Za-z_]\w*", part)
+        if toks:
+            params.add(toks[-1])
+    return params
+
+
+def _addr_params(func_sig: str) -> set[str]:
+    """Solo los parámetros de tipo ADDRESS (posibles DESTINOS de fondos). Un param `uint256 epoch`/`bytes32[]` no
+    puede ser un destino → no lo tratamos como redirección del caller. 18-jul (FP lendvest emergency*)."""
+    m = re.search(r"\(([^)]*)\)", func_sig)
+    if not m:
+        return set()
+    out = set()
+    for part in m.group(1).split(","):
+        if re.search(r"\baddress\b", part):
+            toks = re.findall(r"[A-Za-z_]\w*", part)
+            if toks:
+                out.add(toks[-1])
+    return out
+
+
+def _sweep_dest_attacker_controlled(func_sig: str, body: str) -> bool:
+    """¿El sweep puede mandar fondos a un destino que el CALLER controla (msg.sender/tx.origin o un
+    PARÁMETRO de la función)? True = peligroso (mantener finding). False = destino FIJO (state var) →
+    permissionless es SEGURO, el caller no puede redirigir. Ante duda (no se ve el destino) → True
+    (conservador: NUNCA suprimir a ciegas un sweep real). 16-jul: los 2 FP de BattleChain
+    (sweepUnclaimedCorrupted/Bonus → safeTransfer(recoveryAddress,·)) eran destino fijo → seguros."""
+    params = _func_params(func_sig)
+    dests = []
+    for m in _TRANSFER_DEST.finditer(body):
+        d = (m.group(2) or m.group(3) or "").strip()
+        if d:
+            dests.append(d)
+    if not dests:
+        # No hay transfer VISIBLE en el body (p.ej. mueve fondos vía llamada cross-contract a estado interno:
+        # lendvest `emergency*` → `LVLidoVault.executeAaveWithdraw` + `setEmergencyLenderState`, NUNCA a msg.sender).
+        # Solo es peligroso si el CALLER puede colar su dirección: aparece msg.sender/tx.origin, o un param tipo
+        # ADDRESS (destino potencial) se usa en el body. Si no → el caller NO alcanza los fondos → seguro. 18-jul.
+        addr_params = _addr_params(func_sig)
+        if not (re.search(r"msg\.sender|tx\.origin", body)
+                or any(re.search(rf"\b{re.escape(p)}\b", body) for p in addr_params)):
+            return False   # el caller no aparece en el body → no puede redirigirse fondos → seguro
+        # Aparece el caller, PERO si es un CLAIM/withdraw-OWN (lee un registro per-user keyed by msg.sender —
+        # `userDeposits(msg.sender, …)` o `balances[msg.sender]`) los fondos que salen están ACOTADOS a la cuota
+        # del caller, no es un drain del balance total. Un drain a caller pasa `(msg.sender)` sin coma / como dest.
+        if re.search(r"\[\s*msg\.sender\s*\]|\(\s*msg\.sender\s*,", body):
+            return False
+        return True
+    for d in dests:
+        if d.lower() in ("msg.sender", "tx.origin") or d in params:
+            return True
+    return False
 
 
 def _real_body(content: str, brace_pos: int) -> str:
@@ -111,14 +201,31 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
     """
     Construye la matriz de acceso y detecta funciones críticas sin restricción.
     """
-    from openclaw_audit.detectors._fileutil import iter_sol_files, strip_comments
-    sol_files = [f for f in iter_sol_files(repo_path) if "interface" not in str(f).lower()]
+    from openclaw_audit.detectors._fileutil import iter_sol_files, strip_comments, MAX_SCAN_FILES
+    # Salta interfaces y ficheros FLATTEN (bundles que duplican todo el código + deps → ruido/FP). 16-jul.
+    sol_files = [f for f in iter_sol_files(repo_path)
+                 if "interface" not in str(f).lower() and "flatten" not in str(f).lower()]
 
     if not sol_files:
         return []
 
+    # PRE-PASS (18-jul, cazado en Multipli): nombres de función PROTEGIDOS (con modifier de auth) en ALGÚN fichero
+    # del repo. Un `public virtual` en una base SIN modifier que el contrato concreto OVERRIDE con auth (p.ej. base
+    # `setFeeContract() public virtual` + hijo `setFeeContract() public override requiresAuth`) NO es explotable: en
+    # el deploy manda el override protegido. Marcar la base = FP. Solo se salta si la función es virtual/override Y
+    # su nombre está protegido en otro sitio (una función suelta sin herencia SIGUE marcándose → no sobre-suprime).
+    protected_names: set[str] = set()
+    for f in sol_files[:MAX_SCAN_FILES]:
+        try:
+            c = strip_comments(f.read_text(errors="replace"))
+        except Exception:
+            continue
+        for fm in re.finditer(r"function\s+(\w+)\s*\([^;{]*?\{", c):
+            if _ACCESS_MODIFIERS.search(c[fm.start():fm.end()]):
+                protected_names.add(fm.group(1))
+
     findings = []
-    for sol_file in sol_files[:20]:
+    for sol_file in sol_files[:MAX_SCAN_FILES]:
         try:
             content = strip_comments(sol_file.read_text(errors="replace"))
         except Exception:
@@ -132,6 +239,14 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
             for m in pattern.finditer(content):
                 func_start = m.start()
 
+                # DECLARACIÓN sin cuerpo (interfaz/abstract/flatten): el ';' viene ANTES del '{' → NO puede tener
+                # modifier ni body → marcarla "unprotected" es SIEMPRE FP (fix 16-jul: los 5 FP de Cap eran esto,
+                # declaraciones en flatten.sol). Saltar.
+                _semi = content.find(";", func_start)
+                _brace = content.find("{", func_start)
+                if _semi != -1 and (_brace == -1 or _semi < _brace):
+                    continue
+
                 # Firma (con modificadores) y body REAL (brace-matching, no 200 chars ciegos)
                 func_sig_end = content.find("{", func_start)
                 func_sig = content[func_start:func_sig_end] if func_sig_end != -1 else content[func_start:func_start+200]
@@ -140,8 +255,20 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
                 if _VIEW_PATTERNS.search(func_sig):
                     continue
 
+                # INTERNAL/PRIVATE: no es llamable desde fuera → NO puede ser "unprotected access control" (la auth
+                # vive en el punto de entrada público que la llama). Flagearla = FP. 19-jul: `ERC1967Utils.
+                # upgradeToAndCall`/`upgradeBeaconToAndCall` de OZ (internal) rompían el claim "0 FP en toda OZ".
+                # Un bug real de acceso SIEMPRE está en una función public/external.
+                if re.search(r"\b(internal|private)\b", func_sig):
+                    continue
+
                 # Protegida por MODIFIER (en la firma) o por AUTH INLINE (en su propio body)
                 if _ACCESS_MODIFIERS.search(func_sig) or _INLINE_AUTH.search(body):
+                    continue
+
+                # FUND_SWEEP permissionless PERO a destino FIJO (no msg.sender ni parámetro) = SEGURO:
+                # el caller no puede redirigir fondos (sweep-to-recovery/treasury por keeper). FP común.
+                if impact_type == "FUND_SWEEP" and not _sweep_dest_attacker_controlled(func_sig, body):
                     continue
 
                 # Skip if it's in an interface or abstract
@@ -151,6 +278,10 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
                     continue
 
                 func_name = m.group(0).split("function")[1].split("(")[0].strip()
+
+                # BASE virtual/override protegida en el override concreto → FP (ver PRE-PASS arriba).
+                if func_name in protected_names and re.search(r"\b(virtual|override)\b", func_sig):
+                    continue
 
                 sev = "CRITICAL" if impact_type in ("FUND_SWEEP", "UPGRADE", "MINT") else "HIGH"
                 if impact_type == "INITIALIZE":

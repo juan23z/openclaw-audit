@@ -22,7 +22,7 @@ import logging
 import re
 import uuid
 from pathlib import Path
-from openclaw_audit.detectors._fileutil import iter_sol_files
+from openclaw_audit.detectors._fileutil import iter_sol_files, MAX_SCAN_FILES
 
 _logger = logging.getLogger(__name__)
 
@@ -34,26 +34,38 @@ DETECTOR_INFO = {
 }
 
 # ── Regex: herencia de ERC ───────────────────────────────────────────────────
+# 19-jul: se aplican SOLO a la lista de HERENCIA de cada contrato (`contract X is …{`), NO al fichero entero — antes
+# el `,\s*IERC20` matcheaba `IERC20Pool pool` en una lista de PARÁMETROS y clasificaba mal un contrato-utilidad como
+# token → 12 FPs "función ERC20 faltante" en Lendvest (Upkeeper/Rescue). Ahora: nombre EXACTO con `\b` en la herencia.
 _IS_ERC20 = re.compile(
-    r"(?:is|,)\s*(?:IERC20(?!Metadata|Permit|Burnable)|ERC20(?!Burnable|Snapshot|Votes|Permit|FlashMint|Wrapper|Capped|Pausable|PresetMinterPauser|PresetFixedSupply)\b)",
+    r"\b(?:IERC20|ERC20)\b(?!Burnable|Snapshot|Votes|Permit|FlashMint|Wrapper|Capped|Pausable|Preset|Metadata)",
     re.IGNORECASE,
 )
 _IS_ERC721 = re.compile(
-    r"(?:is|,)\s*(?:IERC721(?!Metadata|Enumerable)|ERC721(?!A\b|Upgradeable|Enumerable|Metadata|URIStorage|Royalty|Burnable|Pausable|PresetMinterPauser|PresetMinterPauserAutoId)\b)",
+    r"\b(?:IERC721|ERC721)\b(?!A\b|Upgradeable|Enumerable|Metadata|URIStorage|Royalty|Burnable|Pausable|Preset)",
     re.IGNORECASE,
 )
 _IS_ERC1155 = re.compile(
-    r"(?:is|,)\s*(?:IERC1155|ERC1155(?!Burnable|Supply|Pausable|PresetMinterPauser|Upgradeable)\b)",
+    r"\b(?:IERC1155|ERC1155)\b(?!Burnable|Supply|Pausable|Preset|Upgradeable)",
     re.IGNORECASE,
 )
 _IS_ERC4626 = re.compile(
-    r"(?:is|,)\s*(?:IERC4626|ERC4626(?!Upgradeable)\b)",
+    r"\b(?:IERC4626|ERC4626)\b(?!Upgradeable)",
     re.IGNORECASE,
 )
-# Hereda una base ERC20 CONCRETA (ERC20, UniswapV2ERC20, SolmateERC20, ERC20Burnable…) — que NO es la
-# interfaz `I…`. Si es así, las funciones (transfer/approve/…) vienen del padre → NO faltan (evita el FP
-# de marcar como "missing" cada token que hereda su implementación, que es el patrón más común).
+# Hereda una base ERC20 CONCRETA (no la interfaz I…) → las funciones vienen del padre, no faltan.
 _ERC20_CONCRETE_BASE = re.compile(r"(?:is|,)\s*((?!I[A-Z])\w*ERC20\w*)\b")
+
+_CONTRACT_INHERITANCE = re.compile(r"(?:abstract\s+)?contract\s+(\w+)\s+is\s+([^{};]+?)\{", re.DOTALL)
+
+
+def _erc_contract(content: str, base_re) -> str | None:
+    """Nombre del contrato que HEREDA la base ERC dada (busca base_re SOLO en la lista de herencia `contract X is …{`,
+    no en params/vars). None si ninguno. Evita clasificar un contrato-utilidad como token por un `IERC20Pool` en params."""
+    for m in _CONTRACT_INHERITANCE.finditer(content):
+        if base_re.search(m.group(2)):
+            return m.group(1)
+    return None
 
 # ── ERC20: funciones obligatorias (name → regex que debe aparecer en el fichero) ─
 _ERC20_REQUIRED = [
@@ -129,7 +141,7 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
     findings = []
     seen: set = set()
 
-    for sol_file in sol_files[:30]:
+    for sol_file in sol_files[:MAX_SCAN_FILES]:
         try:
             content = sol_file.read_text(errors="replace")
         except Exception:
@@ -153,10 +165,10 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
         )
 
         # ── ERC20 compliance ─────────────────────────────────────────────────
-        # OJO: buscar sobre `stripped` (sin comentarios). Sobre `content` crudo, un comentario que mencione
-        # "IERC20"/"ERC20" producía un match fantasma y `_get_contract_name` sacaba un nombre de otro comentario.
-        if not _is_iface and _IS_ERC20.search(stripped):
-            contract_name = _get_contract_name(stripped, _IS_ERC20.search(stripped).start())
+        # Buscar sobre `stripped` (sin comentarios): un comentario que mencione ERC20 daba match fantasma.
+        _erc_cn = None if _is_iface else _erc_contract(stripped, _IS_ERC20)
+        if _erc_cn:
+            contract_name = _erc_cn
             inherits_concrete_erc20 = bool(_ERC20_CONCRETE_BASE.search(stripped))
 
             # Check 1: transfer/transferFrom con return type void (no-bool)
@@ -230,8 +242,7 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
                     })
                     _logger.info("[ErcCompliance] transferFrom returns false in %s::%s", sol_file.name, contract_name)
 
-            # Check 3: missing required ERC20 functions. Se SALTA si el contrato hereda una base ERC20
-            # concreta (las funciones vienen del padre; buscarlas en este fichero daría "missing" falso).
+            # Check 3: missing required ERC20 functions
             for fname, func_re in ([] if inherits_concrete_erc20 else _ERC20_REQUIRED):
                 if not func_re.search(stripped):
                     key = (sol_file.name, contract_name, f"missing_{fname}")
@@ -260,8 +271,9 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
                     _logger.debug("[ErcCompliance] ERC20 missing %s in %s::%s", fname, sol_file.name, contract_name)
 
         # ── ERC4626 rounding compliance ──────────────────────────────────────
-        if not _is_iface and _IS_ERC4626.search(stripped):
-            contract_name = _get_contract_name(stripped, _IS_ERC4626.search(stripped).start())
+        _erc_cn = None if _is_iface else _erc_contract(stripped, _IS_ERC4626)
+        if _erc_cn:
+            contract_name = _erc_cn
 
             for m in _PREVIEW_WITHDRAW.finditer(stripped):
                 fn_start = content.find(m.group(0)[:60])
@@ -305,8 +317,9 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
                     _logger.info("[ErcCompliance] ERC4626 rounding %s in %s::%s", fn_name, sol_file.name, contract_name)
 
         # ── ERC721 compliance ────────────────────────────────────────────────
-        if not _is_iface and _IS_ERC721.search(stripped):
-            contract_name = _get_contract_name(stripped, _IS_ERC721.search(stripped).start())
+        _erc_cn = None if _is_iface else _erc_contract(stripped, _IS_ERC721)
+        if _erc_cn:
+            contract_name = _erc_cn
 
             # Check: ownerOf that doesn't revert on non-existent token (returns address(0))
             for m in _OWNEROF_NO_REVERT.finditer(stripped):
@@ -344,8 +357,9 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
                     _logger.info("[ErcCompliance] ERC721 ownerOf no-revert in %s::%s", sol_file.name, contract_name)
 
         # ── ERC1155 compliance ───────────────────────────────────────────────
-        if not _is_iface and _IS_ERC1155.search(stripped):
-            contract_name = _get_contract_name(stripped, _IS_ERC1155.search(stripped).start())
+        _erc_cn = None if _is_iface else _erc_contract(stripped, _IS_ERC1155)
+        if _erc_cn:
+            contract_name = _erc_cn
 
             for m in _SAFEBATCH.finditer(stripped):
                 body = m.group(1)

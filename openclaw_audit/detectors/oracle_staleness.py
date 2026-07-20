@@ -29,10 +29,22 @@ DETECTOR_INFO = {
 
 _LATEST_ROUND_PATTERN = re.compile(r"\.latestRoundData\(\)|latestRoundData\(\)", re.IGNORECASE)
 
-# Proper staleness check patterns
+# Proper staleness check patterns (en la VENTANA de contexto ±30 líneas del call)
 _STALENESS_CHECK = re.compile(
     r"updatedAt\s*[+\-<>]|block\.timestamp\s*-\s*updatedAt|"
     r"updatedAt\s*==\s*0|MAX_DELAY|STALENESS|staleThreshold|maxAge|heartbeat",
+    re.IGNORECASE,
+)
+
+# Guard de staleness a NIVEL DE FICHERO — evidencia de que el feed SÍ valida frescura aunque el check esté FUERA
+# de la ventana ±30 (helper aparte). 18-jul (FP bounty_247: feeds de Inverse/Dola que validan vía `isPriceStale()`
+# + `updatedAt + heartbeat < block.timestamp` en otra función). Exige un CHECK REAL (helper con nombre-de-guard o
+# una comparación temporal), NO solo mencionar "heartbeat" (una var declarada y nunca usada no protege).
+_STALENESS_FILE_GUARD = re.compile(
+    r"\bis(?:Price)?Stale\b|\bcheckStale\b|\bvalidateStale\b|\brequireFresh\b|\brequireNotStale\b|"
+    r"\b_?stalePrice\b|\bstalenessCheck\b|"
+    r"updatedAt\s*\+|block\.timestamp\s*-\s*\w*[Uu]pdated|block\.timestamp\s*-\s*\w*[Tt]imestamp|"
+    r"updatedAt\s*[<>]=?\s*block\.timestamp|block\.timestamp\s*[<>]=?\s*\w*updatedAt",
     re.IGNORECASE,
 )
 
@@ -70,19 +82,28 @@ def scan(repo_path: Path) -> list[dict]:
         if not _LATEST_ROUND_PATTERN.search(content):
             continue
 
+        # Guard a nivel de FICHERO: si el contrato valida staleness en un helper aparte (fuera de la ventana ±30
+        # del call), NO marcar — el feed SÍ chequea frescura. Evita el FP de feeds con `isPriceStale()`/heartbeat.
+        if _STALENESS_FILE_GUARD.search(content):
+            continue
+
         lines = content.splitlines()
         file_key = str(sol_file)
 
         for m in _LATEST_ROUND_PATTERN.finditer(content):
             line_no = content[:m.start()].count("\n") + 1
+            # DECLARACIÓN del método (`function latestRoundData(…)` en interfaz/override sig), NO una llamada real
+            # a un oráculo → marcarla es FP (bounty_247: IChainlinkFeed). Una llamada real es `.latestRoundData()`.
+            line_text = lines[line_no - 1] if 0 <= line_no - 1 < len(lines) else ""
+            if re.search(r"\bfunction\s+latestRoundData\b", line_text):
+                continue
             ctx_start = max(0, line_no - 5)
             ctx_end = min(len(lines), line_no + _CONTEXT_WINDOW)
             context = "\n".join(lines[ctx_start:ctx_end])
 
-            # Disparo SOLO por el check de staleness (el crítico y detectable de forma robusta vía
-            # updatedAt/block.timestamp/heartbeat). Los otros dos dependen de nombres exactos de variable
-            # (answer/answeredInRound/roundId) → FP en cuanto el dev los renombra; además answeredInRound
-            # está DEPRECADO por Chainlink. Si hay staleness check, confiamos en la integración (no FP).
+            # Disparo SOLO por el check de staleness (crítico y detectable de forma robusta). Los otros
+            # dependen de nombres exactos de variable (answer/answeredInRound/roundId) → FP al renombrar;
+            # answeredInRound además está DEPRECADO por Chainlink. Con staleness check, no marcamos.
             if _STALENESS_CHECK.search(context):
                 continue
 

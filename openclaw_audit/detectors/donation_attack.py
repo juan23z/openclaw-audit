@@ -32,10 +32,20 @@ _BAL_OF_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# Pattern: the result is used in shares/price calculation
+# Pattern: the result is used in shares/price calculation.
+# Las alternativas genéricas llevan \b (word-boundary): sin él, `reserve\s*=` matcheaba como SUBCADENA
+# de `corruptedReserve =`, `sharePrice =`, `collateralRatio =`… → FP (16-jul: los 2 FP de BattleChain
+# ConfidencePool eran `corruptedReserve = toSweep`, un sweep de balance, no accounting de shares).
 _SHARE_CALC_PATTERN = re.compile(
     r"totalAssets|totalShares|getPrice|pricePerShare|exchangeRate|"
-    r"shares\s*=|price\s*=|ratio\s*=|reserve\s*=",
+    r"\bshares\s*=|\bprice\s*=|\bratio\s*=|\breserve\s*=",
+    re.IGNORECASE,
+)
+
+# Herencia de OZ ERC4626 (virtual shares mitigan inflación/donación de serie desde OZ ≥4.9). Señal: el import/base
+# de OpenZeppelin. Solo OZ (un ERC4626 casero podría NO mitigar) → específico para no sobre-suprimir.
+_OZ_ERC4626 = re.compile(
+    r"@openzeppelin[^\n]*ERC4626|\bERC4626Upgradeable\b|import[^\n]*openzeppelin[^\n]*ERC4626",
     re.IGNORECASE,
 )
 
@@ -61,6 +71,14 @@ def scan(repo_path: Path) -> list[dict]:
         try:
             content = strip_comments(sol_file.read_text(errors="replace"))
         except Exception:
+            continue
+
+        # MITIGACIÓN HEREDADA (17-jul): si el contrato hereda el ERC4626 de OpenZeppelin, la protección contra
+        # inflación/donación (virtual shares/assets, _decimalsOffset) está en la BASE, no en este fichero → el
+        # check de contexto ±8 líneas nunca la ve y marca FP. (Multipli: `is ERC4626Upgradeable` de OZ → el
+        # candidato "donation via balanceOf en totalAssets" era FP; el triaje lo sobre-marcó "real".) Saltar el fichero.
+        if _OZ_ERC4626.search(content):
+            _logger.debug("[DonationAttack] OZ ERC4626 (virtual shares) hereda mitigación — %s saltado", sol_file.name)
             continue
 
         lines = content.splitlines()

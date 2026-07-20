@@ -58,8 +58,10 @@ def main(argv):
     repo, cleanup = prepare(target)
     try:
         findings = run_all_custom_detectors("scan", repo)
-        skip = ("node_modules", "/lib/", "/.git/", "/test", "/mock", "/script")
-        n_sol = sum(1 for p in repo.rglob("*.sol") if not any(s in str(p).lower() for s in skip))
+        # Count scope with the SAME filter the detectors use (iter_sol_files) so the reported scope
+        # equals what was actually scanned — deps, tests, mocks and formal-verification harnesses out.
+        from openclaw_audit.detectors._fileutil import iter_sol_files
+        n_sol = len(iter_sol_files(repo))
         rep = build_report(name or repo.name, findings, scope=f"{n_sol} client .sol contracts")
         out = Path(outdir); out.mkdir(parents=True, exist_ok=True)
         (out / "report.md").write_text(render_markdown(rep), encoding="utf-8")

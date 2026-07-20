@@ -26,12 +26,12 @@ _CHECKED = re.compile(r"=|require\s*\(|assert\s*\(|if\s*\(|while\s*\(|return\b|&
 
 
 def scan(repo_path: Path) -> list[dict]:
-    from openclaw_audit.detectors._fileutil import iter_sol_files
+    from openclaw_audit.detectors._fileutil import iter_sol_files, MAX_SCAN_FILES
     sol_files = iter_sol_files(repo_path)
     findings: list[dict] = []
 
     from openclaw_audit.detectors._fileutil import strip_comments
-    for sol_file in sol_files[:60]:
+    for sol_file in sol_files[:MAX_SCAN_FILES]:
         try:
             content = sol_file.read_text(errors="replace")
         except Exception:

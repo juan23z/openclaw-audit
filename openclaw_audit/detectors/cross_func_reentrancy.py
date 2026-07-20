@@ -54,14 +54,15 @@ _EXTERNAL_CALL = re.compile(
     r"\.swap\s*\(|"
     r"\.flashLoan\s*\("
     r")",
-    # SIN IGNORECASE a propósito: Solidity es case-sensitive. Las interfaces son `IFoo(...)` (I mayúscula);
-    # los casts de tipo son minúscula (`int48(...)`, `uint256(...)`). Con IGNORECASE, `I\w+(...)` matcheaba
-    # `int48(bytes32(x).extract(` como si fuera una llamada externa → FP en funciones puras (OZ ERC4337Utils).
+    # SIN IGNORECASE: Solidity es case-sensitive. Interfaces = `IFoo(...)` (I mayúscula); casts = minúscula
+    # (`int48(...)`). Con IGNORECASE, `I\w+(...)` matcheaba `int48(bytes32(x).extract(` como llamada externa → FP.
 )
 
-# State variable updates (assignments to storage)
+# State variable updates (assignments to storage). Incluye asignaciones COMPUESTAS (`-=`/`+=`/`*=`…): el patrón
+# canónico de retiro/reentrancy es `balances[msg.sender] -= amount` tras la llamada externa — antes `=(?!=)` solo
+# veía el `=` simple y se perdía TODOS los `-=`/`+=` (hueco pre-existente cazado en la regresión 17-jul noche).
 _STATE_UPDATE = re.compile(
-    r"\b\w+\s*(?:\[.*?\])?\s*=(?!=)\s*(?!>)",
+    r"\b\w+\s*(?:\[[^\]\[;{}\n]*\])*\s*(?:[-+*/%|&^]?=)(?!=)\s*(?!>)",
     re.MULTILINE,
 )
 
@@ -100,9 +101,8 @@ _REENTRANCY_GUARD = re.compile(
 def _extract_function_bodies(content: str) -> list[dict]:
     """Extract function name + body for analysis."""
     functions = []
-    # [^{;]* (no [^{]*): una declaración de interfaz/abstracta termina en `;` SIN cuerpo. Con [^{]* el
-    # motor cruzaba el `;` hasta la `{` del siguiente contrato/library y capturaba un "cuerpo" falso (p.ej.
-    # las constantes de la library) → FP. Con [^{;]* esas declaraciones sin cuerpo dejan de matchear.
+    # [^{;]* (no [^{]*): una declaración de interfaz/abstracta termina en `;` SIN cuerpo. Con [^{]* el motor
+    # cruzaba el `;` hasta la `{` del siguiente contrato/library y capturaba un "cuerpo" falso → FP.
     func_pattern = re.compile(
         r"function\s+(\w+)\s*\([^)]*\)[^{;]*\{", re.MULTILINE
     )
@@ -128,23 +128,52 @@ def _extract_function_bodies(content: str) -> list[dict]:
 
 _COND = re.compile(r"\b(?:require|assert|revert|if|while)\s*\(")
 
-# Métodos claramente de LECTURA (view/staticcall): un `IFoo(x).supportsY(...)` o `token.balanceOf(...)` NO
-# entrega control a un atacante → no es la "interacción" que dispara reentrancy. Filtrarlos evita FP
-# (p.ej. OZ: sanity-check `supportsAttribute`, y un `view` que solo lee `balanceOf(this)`).
+# Tipo/keyword de DECLARACIÓN local justo antes del nombre de variable. `_STATE_UPDATE` matchea en el
+# NOMBRE (`len =`, `gasUsed =`), sin el tipo que va delante → el filtro de locales miraba el sitio
+# equivocado. Miramos el texto PRECEDENTE: si acaba en `uint256 `/`address `/`bool `/`memory `… es una
+# variable LOCAL (o memoria), no storage → escribirla tras una llamada externa NO es reentrancy. (16-jul:
+# los 2 "real" falsos de SYMMIO — `uint256 len` en claimFee y `uint256 gasUsed` en multicall — eran esto.)
+_LOCAL_DECL_PRE = re.compile(
+    r"(?:uint\d*|int\d*|bool|address|bytes\d*|string|memory|calldata|var)\s+$",
+    re.IGNORECASE,
+)
+
+
+def _is_local_write(body: str, pos: int) -> bool:
+    """True si la asignación en `pos` es a una variable LOCAL/memoria (declaración con tipo, o `memory`),
+    no a STORAGE. Solo las escrituras a storage crean la inconsistencia que explota la reentrancy."""
+    return bool(_LOCAL_DECL_PRE.search(body[max(0, pos - 24):pos]))
+
+
+def _local_names(body: str, sig: str) -> set[str]:
+    """Nombres de variables LOCAL/MEMORIA de esta función (params/return con `memory`/`calldata`, locales
+    primitivas, y arrays creados con `new`). Escribir a estas tras una llamada externa NO es reentrancy
+    (no es storage compartido). Solo se mira DENTRO de la función → no captura storage a nivel de contrato.
+    Error en dirección SEGURA: si no lo reconoce como local, mantiene el finding. (16-jul: `returnData[i]=`
+    de multicall — array en memoria — era esto.)"""
+    text = sig + "\n" + body
+    names: set[str] = set()
+    for m in re.finditer(r"\b(?:memory|calldata)\s+(\w+)", text):
+        names.add(m.group(1))
+    for m in re.finditer(r"\b(?:uint\d*|int\d*|bool|address|bytes\d*|string)\s+(\w+)\b", text, re.IGNORECASE):
+        names.add(m.group(1))
+    for m in re.finditer(r"\b(\w+)\s*=\s*new\b", text):
+        names.add(m.group(1))
+    return names
+
+# Métodos claramente de LECTURA (view/staticcall): `IFoo(x).supportsY(...)` o `token.balanceOf(...)` NO
+# entregan control a un atacante → no son la "interacción" que dispara reentrancy. Filtrarlos evita FP.
 _VIEWISH = re.compile(
     r"\.(?:supports\w*|is[A-Z]\w*|get[A-Z]\w*|has[A-Z]\w*|balanceOf|totalSupply|totalAssets|"
     r"decimals|symbol|allowance|preview[A-Z]\w*|convertTo\w*|latestRoundData|latestAnswer)\s*\(")
 
 
 def _condition_spans(body: str) -> list[tuple]:
-    """Rangos (inicio,fin) de las CONDICIONES require()/if()/assert()/... por emparejamiento de paréntesis.
-    Una llamada externa dentro de un `require(IFoo(x).check())` es un check (view/staticcall), NO la
-    'interacción' de CEI → no debe contar como la llamada que dispara reentrancy (evita FP tipo OZ _installModule,
-    que hace state-writes y deja el `onInstall` real correctamente al final)."""
+    """Rangos (inicio,fin) de condiciones require()/if()/... por emparejamiento de paréntesis. Una llamada
+    dentro de `require(IFoo(x).check())` es un check (view), NO la 'interacción' de CEI (evita FP)."""
     spans = []
     for m in _COND.finditer(body):
-        i = m.end() - 1  # en '('
-        depth = 0
+        i, depth = m.end() - 1, 0
         for j in range(i, len(body)):
             if body[j] == "(":
                 depth += 1
@@ -160,7 +189,7 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
     """
     Detecta patrones de cross-function y read-only reentrancy.
     """
-    from openclaw_audit.detectors._fileutil import iter_sol_files, strip_comments
+    from openclaw_audit.detectors._fileutil import iter_sol_files, strip_comments, MAX_SCAN_FILES
     sol_files = [f for f in iter_sol_files(repo_path) if "interface" not in str(f).lower()]
 
     if not sol_files:
@@ -168,7 +197,7 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
 
     findings = []
 
-    for sol_file in sol_files[:20]:
+    for sol_file in sol_files[:MAX_SCAN_FILES]:
         try:
             content = strip_comments(sol_file.read_text(errors="replace"))  # no extraer funciones de NatSpec/comentarios
         except Exception:
@@ -187,7 +216,7 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
             is_pure = bool(re.search(r"\bpure\b", sig))
             is_view = bool(re.search(r"\bview\b", sig))
 
-            # Una función pure no lee ni escribe estado → no puede ser NINGÚN tipo de reentrancy. Fuera.
+            # Una función pure no lee ni escribe estado → no puede ser NINGÚN tipo de reentrancy.
             if is_pure:
                 continue
 
@@ -195,8 +224,7 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
             if _REENTRANCY_GUARD.search(sig + body):
                 continue
 
-            # Find positions of external calls and state updates. Excluye llamadas dentro de condiciones
-            # require()/if() (checks view, no la 'interacción' de CEI).
+            # Externals excluyendo (a) las que van dentro de condiciones require()/if() y (b) métodos view-ish.
             cond_spans = _condition_spans(body)
             in_cond = lambda p: any(a <= p <= b for a, b in cond_spans)
             ext_calls = [(m.start(), m.group()) for m in _EXTERNAL_CALL.finditer(body)
@@ -209,13 +237,23 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
 
             first_ext_call = ext_calls[0][0]
 
-            # Pattern 1: External call BEFORE state update (classic CEI violation). Una función view no
-            # escribe estado → cualquier "=" es a una variable local (FP); solo aplica a funciones que mutan.
+            # Pattern 1: External call BEFORE state update (CEI violation). Una función view no escribe
+            # estado → cualquier "=" es a variable local (FP); solo aplica a funciones que mutan.
             late_updates = [u for u in state_updates if u[0] > first_ext_call]
             if late_updates and not has_guard and not is_view:
-                # Check if the late update is significant (not just local var)
-                significant = [u for u in late_updates
-                               if not re.match(r"\s*(?:uint|int|bool|address|bytes)\w*\s+", u[1])]
+                # Check if the late update is significant (STORAGE, not a local/memory declaration).
+                # (a) texto PRECEDENTE con tipo → declaración local (`uint256 len =`/`uint256 gasUsed =`);
+                # (b) el nombre escrito (`returnData[i] =` → `returnData`) es una var local/memoria de la
+                # función. Ambos = NO storage → fuera. Lo que quede es escritura a storage real.
+                local_names = _local_names(body, sig)
+
+                def _writes_storage(u):
+                    if _is_local_write(body, u[0]):
+                        return False
+                    nm = re.match(r"\s*(\w+)", u[1])
+                    return not (nm and nm.group(1) in local_names)
+
+                significant = [u for u in late_updates if _writes_storage(u)]
                 if significant:
                     findings.append({
                         "id": str(uuid.uuid4()),

@@ -82,6 +82,10 @@ _INLINE_AUTH = re.compile(
     # que hace el gate dentro. El check de body-only no lo veía → FP de `Hub.sweep()` en Aave V4. Gated por el
     # PREFIJO-verbo del helper para no sobre-suprimir un `_recordDeposit(msg.sender,…)` cualquiera.
     r"_(?:validate|check|authorize|assert|verify|ensure|require|only)[A-Za-z]*\s*\([^;{}]*msg\.sender|"
+    # 21-jul: AUTH POR MAPPING+MÉTODO — `if (!userConfig[msg.sender].isTokenAdmin()) revert`. El rol vive en un
+    # mapping keyeado por el caller y se comprueba con un método predicado (is/has/can/only/check). Gated por el
+    # prefijo-verbo del método para no sobre-suprimir accesos de mapping normales (balances[msg.sender]).
+    r"\[\s*(?:msg\.sender|_msgSender\(\)|_?caller)\s*\]\s*\.\s*(?:is|has|can|only|check|require|assert)[A-Za-z]*\s*\(|"
     # Auth INLINE por VARIABLE LOCAL: `address sender=_msgSender(); if(sender!=guardian && sender!=governance) revert…`
     # (17-jul: los 2 pause() de VeriSphere eran esto — el detector solo veía `msg.sender` directo). 3 señales:
     r"if\s*\(\s*(sender|caller|_sender|_caller|msgsender|_msgsender)\s*[!=]=|"            # (1) if(sender != …)

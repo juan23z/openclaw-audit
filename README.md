@@ -24,12 +24,16 @@ Or install it: `pipx install git+https://github.com/juan23z/openclaw-audit` → 
 
 ## ⚡ Use it in CI (GitHub Action)
 
-Get a security scan on **every push and PR** — the report lands in the job summary + an artifact. Two lines:
+Get a security scan on **every push and PR** — a summary lands as a **comment on your PR**, the full report in
+the job summary + an artifact. Two lines:
 
 ```yaml
 # .github/workflows/security.yml
 name: security
 on: [push, pull_request]
+permissions:
+  contents: read
+  pull-requests: write        # lets the scan post its summary as a PR comment
 jobs:
   audit:
     runs-on: ubuntu-latest
@@ -39,10 +43,21 @@ jobs:
         with:
           path: contracts        # optional, default '.'
           # fail-on-candidates: true   # optional, default false (heuristics are advisory)
+          # comment-on-pr: false       # optional, default true
 ```
 
 That's it — no API keys, no cost. Want **verified findings + continuous monitoring** (re-audited on every
 change)? Get a human audit → **[order on Fiverr](https://www.fiverr.com/s/P2kNDP0)** · [sample report & service](https://juan23z.github.io)
+
+## 🏷️ Show it off — add the badge
+
+Scanning your contracts with OpenClaw Audit? Add the badge to your README:
+
+[![Secured with OpenClaw Audit](https://img.shields.io/badge/secured%20with-OpenClaw%20Audit-6f42c1?logo=ethereum&logoColor=white)](https://github.com/juan23z/openclaw-audit)
+
+```markdown
+[![Secured with OpenClaw Audit](https://img.shields.io/badge/secured%20with-OpenClaw%20Audit-6f42c1?logo=ethereum&logoColor=white)](https://github.com/juan23z/openclaw-audit)
+```
 
 ## What it checks (12 detectors)
 

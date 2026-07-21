@@ -18,6 +18,10 @@ inputs:
     description: 'Fail the job if any candidate observation is found (default false — heuristics are advisory)'
     required: false
     default: 'false'
+  comment-on-pr:
+    description: 'Post/update a summary comment on the pull request (default true; needs pull-requests: write)'
+    required: false
+    default: 'true'
 
 runs:
   using: 'composite'
@@ -49,6 +53,33 @@ runs:
         if [ "${{ inputs.fail-on-candidates }}" = "true" ] && [ "$N" -gt 0 ]; then
           echo "::error::OpenClaw Audit found $N candidate observation(s) and fail-on-candidates is enabled."
           exit 1
+        fi
+
+    - name: Comment on PR
+      if: github.event_name == 'pull_request' && inputs.comment-on-pr == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        OUT="$RUNNER_TEMP/openclaw-report"
+        N=$(grep -cE '^### [0-9]' "$OUT/report.md" 2>/dev/null || true); N=${N:-0}
+        MARKER="<!-- openclaw-audit -->"
+        RUN="$GITHUB_SERVER_URL/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        if [ "$N" -gt 0 ]; then
+          HDR="🛡️ **OpenClaw Audit** — \`$N\` candidate observation(s) · heuristic, **verify before acting**."
+        else
+          HDR="🛡️ **OpenClaw Audit** — ✅ clean on this change (no candidate observations)."
+        fi
+        SUB="<sub>Free heuristic scan · [report in the run summary]($RUN) + artifact · want verified findings + continuous monitoring? → **[juan23z.github.io](https://juan23z.github.io)**</sub>"
+        BODY=$(printf '%s\n%s\n\n%s\n' "$MARKER" "$HDR" "$SUB")
+        PR="${{ github.event.pull_request.number }}"
+        REPO="${{ github.repository }}"
+        # Upsert: update our existing comment instead of spamming a new one on every push.
+        ID=$(gh api "repos/$REPO/issues/$PR/comments" --paginate --jq ".[] | select(.body | contains(\"$MARKER\")) | .id" 2>/dev/null | head -1 || true)
+        if [ -n "$ID" ]; then
+          gh api -X PATCH "repos/$REPO/issues/comments/$ID" -f body="$BODY" >/dev/null 2>&1 || echo "::notice::OpenClaw: PR comment needs 'permissions: pull-requests: write' in your workflow"
+        else
+          gh api -X POST "repos/$REPO/issues/$PR/comments" -f body="$BODY" >/dev/null 2>&1 || echo "::notice::OpenClaw: PR comment needs 'permissions: pull-requests: write' in your workflow"
         fi
 
     - name: Upload report artifact

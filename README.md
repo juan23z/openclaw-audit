@@ -85,6 +85,11 @@ Runs clean on clean code: **0 findings across the entire OpenZeppelin contracts 
 codebase in web3). Detectors skip comments, tests and dependencies — so you get signal, not a wall of false
 positives.
 
+Don't take our word for it — see the **[full Calibration Report](CALIBRATION.md)**: OpenClaw run across 10 of the
+most-audited codebases in the ecosystem (OpenZeppelin, Solady, Uniswap v2/v3/v4, Morpho Blue, Permit2, PRBMath…),
+with every flag verified by hand. **14 candidates across 608 source files; 4 codebases perfectly clean.** Every
+number is reproducible in one command.
+
 ## ⚠️ Honest by design
 
 These are **heuristic candidates**, not confirmed vulnerabilities. Static heuristics produce false positives —

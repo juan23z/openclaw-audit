@@ -13,9 +13,12 @@ MAX_SCAN_FILES = int(os.getenv("OPENCLAW_MAX_FILES", "20000"))
 # no artefactos generados. Además el fuzzer lanza `forge clean` que BORRA out/ en paralelo →
 # el rglob('*.sol') petaba (FileNotFoundError: <repo>/out) y el detector saltaba el repo ENTERO,
 # perdiendo todos sus bugs. Bug hallado en vivo 14-jun.
+# OJO: NO metas "packages" aquí. En monorepos/workspaces (yarn/npm/pnpm) `packages/` es el SOURCE de
+# primera parte (p.ej. `packages/contracts/src/*.sol`) — las deps reales viven en node_modules/lib (ya saltados).
+# Saltar `packages` dejaba CIEGO el scanner a monorepos enteros → 0 escaneado != 0 bugs (cazado 21-jul).
 _SKIP_DIRS = {"node_modules", ".git", "lib", "out", "artifacts", "cache",
               "broadcast", "forge-cache", ".cache", "typechain", "typechain-types",
-              "dependencies", "packages", "vendor", "remappings"}
+              "dependencies", "vendor", "remappings"}
 
 # Marcadores de TEST/MOCK/script (out-of-scope en bounties). Un bug en un .t.sol o /mock/ NO es
 # vulnerabilidad real → enviarlo = rechazo + daño de reputación (lo que throttleó la cuenta).

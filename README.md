@@ -1,6 +1,9 @@
 # 🛡️ OpenClaw Audit
 
+[![GitHub Marketplace](https://img.shields.io/badge/GitHub-Marketplace-6f42c1?logo=github)](https://github.com/marketplace/actions/openclaw-audit) [![0 false positives on OpenZeppelin](https://img.shields.io/badge/false%20positives%20on%20OpenZeppelin-0-brightgreen)](#-calibrated-not-noisy) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
+
 **Free, fast heuristic security scanner for Solidity** — point it at a repo, get a professional report in seconds.
+Runs clean on OpenZeppelin (0 findings, 247 files) so you get signal, not noise. Add it to CI in two lines.
 
 Part of [OpenClaw](https://juan23z.github.io), an autonomous multi-agent system that runs a Web3 security
 workflow 24/7. This is the open-source scanning core.

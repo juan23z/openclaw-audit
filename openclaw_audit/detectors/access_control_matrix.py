@@ -219,14 +219,20 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
     # el deploy manda el override protegido. Marcar la base = FP. Solo se salta si la función es virtual/override Y
     # su nombre está protegido en otro sitio (una función suelta sin herencia SIGUE marcándose → no sobre-suprime).
     protected_names: set[str] = set()
+    # + funciones _initialize/__X_init con candado OZ (initializer/reinitializer) en CUALQUIER fichero del repo — el
+    # guard suele estar en el PADRE heredado (BaseEngine._initialize), no en el hijo. 22-jul (FP fork Vertex).
+    guarded_inits: set[str] = set()
     for f in sol_files[:MAX_SCAN_FILES]:
         try:
             c = strip_comments(f.read_text(errors="replace"))
         except Exception:
             continue
         for fm in re.finditer(r"function\s+(\w+)\s*\([^;{]*?\{", c):
-            if _ACCESS_MODIFIERS.search(c[fm.start():fm.end()]):
+            span = c[fm.start():fm.end()]
+            if _ACCESS_MODIFIERS.search(span):
                 protected_names.add(fm.group(1))
+            if re.search(r"\b(initializer|reinitializer)\b", span):
+                guarded_inits.add(fm.group(1))
 
     findings = []
     for sol_file in sol_files[:MAX_SCAN_FILES]:
@@ -268,6 +274,14 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
 
                 # Protegida por MODIFIER (en la firma) o por AUTH INLINE (en su propio body)
                 if _ACCESS_MODIFIERS.search(func_sig) or _INLINE_AUTH.search(body):
+                    continue
+
+                # INITIALIZE que DELEGA en un _initialize INTERNO con candado OZ (initializer/reinitializer) →
+                # PROTEGIDO (el guard se dispara en la llamada interna → solo 1 vez). El guard suele estar en el
+                # PADRE heredado (BaseEngine._initialize `internal initializer`). FP verificado a mano. 22-jul.
+                if impact_type == "INITIALIZE" and any(
+                        _callee in guarded_inits
+                        for _callee in re.findall(r"\b(\w+)\s*\(", body)):
                     continue
 
                 # FUND_SWEEP permissionless PERO a destino FIJO (no msg.sender ni parámetro) = SEGURO:

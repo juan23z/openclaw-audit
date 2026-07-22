@@ -39,7 +39,9 @@ _ERC4626_PATTERN = re.compile(r"ERC4626|IERC4626|_deposit|_mint.*shares", re.IGN
 _VIRTUAL_SHARES_PATTERN = re.compile(
     r"VIRTUAL_SHARES|_VIRTUAL_SHARES|virtualShares|deadShares|"
     r"_mint.*address\(0\)|burn.*address\(0\)|MINIMUM_SHARES|MIN_SHARES|"
-    r"decimalsOffset|10\s*\*\*\s*\d+\s*\+\s*totalSupply",
+    r"decimalsOffset|10\s*\*\*\s*\d+\s*\+\s*totalSupply|"
+    # dead-shares a la dirección 0x…dead + shares bloqueadas por constante (como MINIMUM_LIQUIDITY de UniV2). 22-jul.
+    r"0x0*dead|LOCKED_SHARES|_LOCKED_SHARES|lockedShares|_mintLockedShares|MINIMUM_LIQUIDITY",
     re.IGNORECASE,
 )
 

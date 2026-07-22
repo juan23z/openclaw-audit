@@ -121,6 +121,16 @@ def scan(repo_path: Path, contest_id: str = "") -> list[dict]:
                 continue
 
             func_name = _get_function_name(content, m.start())
+
+            # CONTEXTO COSMÉTICO (arte SVG / tokenURI / descriptor / render): la división es para DIBUJAR, no para
+            # dinero → precision loss irrelevante = FP. Verificado a mano (Velodrome VeArtProxy). El código financiero
+            # (previewRedeem/convertToShares…) NO empieza así ni vive en ficheros de arte → sigue disparando. 22-jul.
+            _fl = sol_file.name.lower()
+            _fnl = (func_name or "").lower()
+            if (any(a in _fl for a in ("artproxy", "descriptor", "tokenuri", "svg", "metadata", "onchainart", "render"))
+                    or _fnl.startswith(("generate", "draw", "render", "svg", "tokenuri"))):
+                continue
+
             key = (sol_file.name, func_name, "div_mul")
             if key in seen:
                 continue

@@ -29,28 +29,23 @@ DETECTOR_INFO = {
     "category": "token_compatibility",
 }
 
-# Pattern: transferFrom called, then amount used directly
+# transferFrom(from, TO, AMOUNT) / safeTransferFrom(token, from, TO, AMOUNT) — captura TO y AMOUNT (últimos 2 args).
+# Reescrito 22-jul (T1): antes exigía que la variable de contabilidad tuviera un nombre de una lista fija
+# (totalDeposited/_deposits/…) → NO disparaba ni en un bug obvio (`deposits[x]+=amount`). Ahora captura la variable
+# AMOUNT del propio transferFrom y comprueba si se REUSA en contabilidad — genérico, sin depender del nombre.
 _TRANSFER_FROM_PATTERN = re.compile(
-    r"\.transferFrom\s*\([^)]+\)|safeTransferFrom\s*\([^)]+\)",
+    r"(?:safeTransferFrom|transferFrom)\s*\(((?:[^()]|\([^()]*\))*)\)",  # tolera 1 nivel de anidamiento: address(this)
     re.IGNORECASE,
 )
 
-# Mitigation: actual received amount calculated
+# Mitigation: actual received amount calculated (balance snapshot)
 _BALANCE_CHECK_PATTERN = re.compile(
     r"balanceBefore|balanceAfter|balanceOf.*before|before.*balance|"
-    r"received\s*=|actualAmount|amountReceived|_received",
+    r"received\s*=|actualAmount|amountReceived|_received|balanceOf\(address\(this\)\)",
     re.IGNORECASE,
 )
 
-# Pattern: input amount used directly in state update after transferFrom
-_DIRECT_AMOUNT_PATTERN = re.compile(
-    r"(?:totalDeposited|totalAssets|_balances|balanceOf|_deposits|reserves)"
-    r"\s*[+\-]?=\s*amount\b|"
-    r"amount\b.*(?:totalDeposited|totalAssets|_balances|_deposits)",
-    re.IGNORECASE,
-)
-
-_CONTEXT_WINDOW = 20
+_CONTEXT_WINDOW = 22
 
 
 def scan(repo_path: Path) -> list[dict]:
@@ -73,17 +68,42 @@ def scan(repo_path: Path) -> list[dict]:
         lines = content.splitlines()
 
         for m in _TRANSFER_FROM_PATTERN.finditer(content):
+            args = [a.strip() for a in m.group(1).split(",")]
+            if len(args) < 2:
+                continue
+            to_arg, amt_arg = args[-2], args[-1]
+            # Solo si el contrato RECIBE tokens (destino = address(this)); si transfiere HACIA fuera, el fee del
+            # importe recibido no es un problema de SU contabilidad.
+            if "address(this)" not in to_arg:
+                continue
+            # La variable AMOUNT debe ser un identificador simple (no un literal/expresión ya ajustada).
+            _amt_m = re.match(r"[A-Za-z_]\w*$", amt_arg)
+            if not _amt_m:
+                continue
+            amt = _amt_m.group(0)
+            # NFT (ERC721/1155): `transferFrom(from, to, tokenId)` — el 3er arg es un ID, NO un importe → fee-on-transfer
+            # NO aplica (es concepto de ERC20 fungible). FP verificado en OZ ERC721Wrapper. 22-jul.
+            if amt.lower() in ("tokenid", "_tokenid", "id", "_id", "nftid", "tokenids", "nft") \
+                    or re.search(r"721|1155|nft|wrapper", sol_file.name, re.I):
+                continue
+
             line_no = content[:m.start()].count("\n") + 1
             ctx_start = max(0, line_no - 3)
             ctx_end = min(len(lines), line_no + _CONTEXT_WINDOW)
             context = "\n".join(lines[ctx_start:ctx_end])
+            after = "\n".join(lines[line_no - 1:ctx_end])   # desde el transfer en adelante (la contabilidad va después)
 
-            # Check if proper balance tracking is used
+            # Mitigado si mide el balance real recibido (snapshot).
             if _BALANCE_CHECK_PATTERN.search(context):
                 continue
 
-            # Check if input amount is directly used in accounting
-            if not _DIRECT_AMOUNT_PATTERN.search(context):
+            # BUG si la MISMA variable `amount` se REUSA en contabilidad DESPUÉS del transfer (asignación/arit/mint),
+            # en vez de medir lo recibido. Genérico (no depende del nombre de la variable de estado).
+            _a = re.escape(amt)
+            if not re.search(r"[+\-]?=\s*[^;=\n]*\b" + _a + r"\b"           # X = ... amount / X += amount
+                             r"|\b" + _a + r"\b[^;\n]{0,60}[+\-]?=[^=]"       # amount ... = X  (menos común)
+                             r"|_?mint\s*\([^)]*\b" + _a + r"\b"              # _mint(x, amount)
+                             r"|\bshares?\b[^;\n]*\b" + _a + r"\b", after):   # shares = amount ...
                 continue
 
             file_key = str(sol_file)

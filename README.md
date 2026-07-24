@@ -8,6 +8,10 @@ Runs clean on OpenZeppelin (0 findings, 247 files) so you get signal, not noise.
 Part of [OpenClaw](https://juan23z.github.io), an autonomous multi-agent system that runs a Web3 security
 workflow 24/7. This is the open-source scanning core.
 
+> 🛡️ **Shipping to mainnet? Want a human on it?** The scanner flags *candidates* — a **Pre-Mainnet Express**
+> review adds **hand-verified** findings (zero false-positive spam) + a plain-English report in **48h**, from
+> **$149** (pay in USDC, no forms). → **[Pricing &amp; services →](https://juan23z.github.io/pricing.html)**
+
 ```bash
 python scan.py https://github.com/org/protocol --name "Protocol" --out ./report
 # → ./report/report.md  +  ./report/report.html
@@ -95,7 +99,8 @@ number is reproducible in one command.
 These are **heuristic candidates**, not confirmed vulnerabilities. Static heuristics produce false positives —
 **verify each finding by hand before acting**. The report labels every item as *"candidate · verify"*.
 
-Want a **full manual review** with verified findings and a signed report? → **https://juan23z.github.io**
+Want a **human review** with verified findings and a plain-English report? Start with a **Pre-Mainnet Express
+($149, pay in USDC)** or a full core review → **[pricing &amp; services](https://juan23z.github.io/pricing.html)**
 
 ## 🔗 On-chain attestation (optional)
 

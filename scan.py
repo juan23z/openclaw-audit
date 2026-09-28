@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from openclaw_audit.detectors.runner import run_all_custom_detectors
-from openclaw_audit.report import build_report, render_markdown, render_html
+from openclaw_audit.report import build_report, render_markdown, render_html, render_json, render_sarif
 
 
 def _is_url(s):
@@ -61,13 +61,29 @@ def main(argv):
         # Count scope with the SAME filter the detectors use (iter_sol_files) so the reported scope
         # equals what was actually scanned — deps, tests, mocks and formal-verification harnesses out.
         from openclaw_audit.detectors._fileutil import iter_sol_files
-        n_sol = len(iter_sol_files(repo))
+        sol_files = iter_sol_files(repo)
+        n_sol = len(sol_files)
         rep = build_report(name or repo.name, findings, scope=f"{n_sol} client .sol contracts")
         out = Path(outdir); out.mkdir(parents=True, exist_ok=True)
         (out / "report.md").write_text(render_markdown(rep), encoding="utf-8")
         (out / "report.html").write_text(render_html(rep), encoding="utf-8")
+        # Machine-readable outputs. SARIF lets GitHub code-scanning annotate the source inline,
+        # so build a basename→repo-relative-path map (only for unambiguous names) for its locations.
+        (out / "report.json").write_text(render_json(rep), encoding="utf-8")
+        path_map, dupes = {}, set()
+        for p in sol_files:
+            try:
+                rel = p.relative_to(repo).as_posix()
+            except ValueError:
+                rel = p.name
+            if p.name in path_map and path_map[p.name] != rel:
+                dupes.add(p.name)          # ambiguous basename → fall back to bare name in SARIF
+            path_map[p.name] = rel
+        for d in dupes:
+            path_map.pop(d, None)
+        (out / "report.sarif").write_text(render_sarif(rep, path_map), encoding="utf-8")
         print(f"✅ {len(rep['candidates'])} candidate observation(s) — verify before acting.")
-        print(f"   {out/'report.md'}\n   {out/'report.html'}")
+        print(f"   {out/'report.md'}\n   {out/'report.html'}\n   {out/'report.json'}\n   {out/'report.sarif'}")
     finally:
         if cleanup:
             shutil.rmtree(cleanup, ignore_errors=True)

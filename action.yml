@@ -22,6 +22,10 @@ inputs:
     description: 'Post/update a summary comment on the pull request (default true; needs pull-requests: write)'
     required: false
     default: 'true'
+  upload-sarif:
+    description: 'Upload results to the GitHub Security / code-scanning tab (default false; needs security-events: write)'
+    required: false
+    default: 'false'
 
 runs:
   using: 'composite'
@@ -89,3 +93,10 @@ runs:
         name: openclaw-audit-report
         path: ${{ runner.temp }}/openclaw-report/
         if-no-files-found: warn
+
+    - name: Upload SARIF to code scanning
+      if: always() && inputs.upload-sarif == 'true'
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ runner.temp }}/openclaw-report/report.sarif
+        category: openclaw-audit

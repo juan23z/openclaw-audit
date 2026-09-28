@@ -53,6 +53,42 @@ jobs:
 That's it — no API keys, no cost. Want **verified findings + continuous monitoring** (re-audited on every
 change)? Get a human audit → **[order on Fiverr](https://www.fiverr.com/s/P2kNDP0)** · [sample report & service](https://juan23z.github.io)
 
+### 🔦 Findings in your Security tab (SARIF)
+
+OpenClaw writes a `report.sarif` (SARIF 2.1.0) to `${{ runner.temp }}/openclaw-report/report.sarif`. Upload it with
+GitHub's own `upload-sarif` action and candidates show up **inline on the diff** and in the repo's **Security → Code
+scanning** tab — same place CodeQL results land. Add the `security-events: write` permission and one step:
+
+```yaml
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write      # lets the SARIF upload write to the Security tab
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: juan23z/openclaw-audit@v1
+      - uses: github/codeql-action/upload-sarif@v3   # pin to a commit SHA if your policy requires it
+        if: always()
+        with:
+          sarif_file: ${{ runner.temp }}/openclaw-report/report.sarif
+          category: openclaw-audit
+```
+
+## 📤 Output formats
+
+Every run writes four files to the output dir (`--out`, default `./report`), so you get a report to read **and**
+machine-readable output to pipe anywhere:
+
+| File | Use |
+|------|-----|
+| `report.md` | Human-readable report (job summary, PRs) |
+| `report.html` | Standalone styled report (share / print to PDF) |
+| `report.json` | Programmatic use — findings in a stable shape |
+| `report.sarif` | SARIF 2.1.0 — GitHub code scanning, other SARIF viewers |
+
 ## 🏷️ Show it off — add the badge
 
 Scanning your contracts with OpenClaw Audit? Add the badge to your README:

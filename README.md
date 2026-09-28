@@ -48,7 +48,6 @@ jobs:
           path: contracts        # optional, default '.'
           # fail-on-candidates: true   # optional, default false (heuristics are advisory)
           # comment-on-pr: false       # optional, default true
-          # upload-sarif: true         # optional, default false — see below
 ```
 
 That's it — no API keys, no cost. Want **verified findings + continuous monitoring** (re-audited on every
@@ -56,23 +55,26 @@ change)? Get a human audit → **[order on Fiverr](https://www.fiverr.com/s/P2kN
 
 ### 🔦 Findings in your Security tab (SARIF)
 
-Set `upload-sarif: true` and OpenClaw uploads its results to GitHub **code scanning**, so candidates show up
-**inline on the diff** and in the repo's **Security → Code scanning** tab — same place CodeQL results land. Add the
-`security-events: write` permission:
+OpenClaw writes a `report.sarif` (SARIF 2.1.0) to `${{ runner.temp }}/openclaw-report/report.sarif`. Upload it with
+GitHub's own `upload-sarif` action and candidates show up **inline on the diff** and in the repo's **Security → Code
+scanning** tab — same place CodeQL results land. Add the `security-events: write` permission and one step:
 
 ```yaml
 permissions:
   contents: read
   pull-requests: write
-  security-events: write      # lets OpenClaw upload SARIF to the Security tab
+  security-events: write      # lets the SARIF upload write to the Security tab
 jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: juan23z/openclaw-audit@v1
+      - uses: github/codeql-action/upload-sarif@v3   # pin to a commit SHA if your policy requires it
+        if: always()
         with:
-          upload-sarif: true
+          sarif_file: ${{ runner.temp }}/openclaw-report/report.sarif
+          category: openclaw-audit
 ```
 
 ## 📤 Output formats

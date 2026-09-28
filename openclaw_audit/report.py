@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import html
 import json
-import re
 
 _SEV_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4, "INFORMATIONAL": 4}
 _SEV_COL = {"CRITICAL": "#b91c1c", "HIGH": "#dc2626", "MEDIUM": "#d97706",
@@ -192,23 +191,36 @@ if it's not useful, you don't pay) is at <a href="https://juan23z.github.io/pric
 _SARIF_LEVEL = {"CRITICAL": "error", "HIGH": "error", "MEDIUM": "warning",
                 "LOW": "note", "INFO": "note", "INFORMATIONAL": "note"}
 
-# Finding location: 'name.sol:42' (file+line) or 'name.sol:funcName' (file only, no line).
-_LOC_RE = re.compile(r"^\s*([^\s:]+\.sol)(?::(\d+))?\b", re.IGNORECASE)
-
-
 def _slug(title):
-    s = re.sub(r"[^a-z0-9]+", "-", (title or "observation").lower()).strip("-")
-    return s[:60] or "observation"
+    """Kebab-case rule id from a title. Plain-string (no regex) so there's no ReDoS surface on untrusted input."""
+    out, prev_dash = [], False
+    for ch in (title or "observation").lower():
+        if ch.isascii() and ch.isalnum():
+            out.append(ch)
+            prev_dash = False
+        elif not prev_dash:
+            out.append("-")
+            prev_dash = True
+    return "".join(out).strip("-")[:60] or "observation"
 
 
 def _parse_location(affected_code):
-    """Extract (filename, line) from a finding's affected_code (first line 'name.sol:42'). None if absent."""
-    if not affected_code:
+    """Extract (filename, line) from a finding's affected_code first line: 'name.sol:42', 'name.sol:funcName'
+    or 'name.sol'. Returns (name, line|None) or None. Plain-string parsing — no regex, no ReDoS surface."""
+    if not affected_code or not affected_code.strip():
         return None
-    m = _LOC_RE.match(affected_code.strip().splitlines()[0] if affected_code.strip() else "")
-    if not m:
+    first = affected_code.strip().splitlines()[0].strip()
+    fname, _, rest = first.partition(":")
+    fname = fname.strip()
+    if not fname.lower().endswith(".sol"):
         return None
-    return m.group(1), (int(m.group(2)) if m.group(2) else None)
+    digits = ""
+    for ch in rest.strip():
+        if ch.isdigit():
+            digits += ch
+        else:
+            break
+    return fname, (int(digits) if digits else None)
 
 
 def render_json(rep):

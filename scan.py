@@ -9,6 +9,7 @@ Usage:
   python scan.py <git-url-or-path> [--name "Project"] [--out ./report]
   python scan.py https://github.com/org/protocol --name "Protocol" --out ./report
 """
+import os
 import re
 import shutil
 import subprocess
@@ -65,11 +66,11 @@ def main(argv):
         n_sol = len(sol_files)
         rep = build_report(name or repo.name, findings, scope=f"{n_sol} client .sol contracts")
         out = Path(outdir); out.mkdir(parents=True, exist_ok=True)
-        (out / "report.md").write_text(render_markdown(rep), encoding="utf-8")
-        (out / "report.html").write_text(render_html(rep), encoding="utf-8")
+        _safe_out_file(out, "report.md").write_text(render_markdown(rep), encoding="utf-8")
+        _safe_out_file(out, "report.html").write_text(render_html(rep), encoding="utf-8")
         # Machine-readable outputs. SARIF lets GitHub code-scanning annotate the source inline,
         # so build a basename→repo-relative-path map (only for unambiguous names) for its locations.
-        (out / "report.json").write_text(render_json(rep), encoding="utf-8")
+        _safe_out_file(out, "report.json").write_text(render_json(rep), encoding="utf-8")
         path_map, dupes = {}, set()
         for p in sol_files:
             try:
@@ -81,12 +82,26 @@ def main(argv):
             path_map[p.name] = rel
         for d in dupes:
             path_map.pop(d, None)
-        (out / "report.sarif").write_text(render_sarif(rep, path_map), encoding="utf-8")
+        _safe_out_file(out, "report.sarif").write_text(render_sarif(rep, path_map), encoding="utf-8")
         print(f"✅ {len(rep['candidates'])} candidate observation(s) — verify before acting.")
         print(f"   {out/'report.md'}\n   {out/'report.html'}\n   {out/'report.json'}\n   {out/'report.sarif'}")
     finally:
         if cleanup:
             shutil.rmtree(cleanup, ignore_errors=True)
+
+
+def _safe_out_file(out_dir, name):
+    """Resolve out_dir/name and confirm it stays inside out_dir before writing.
+
+    The output dir comes from the CLI (--out), so treat it as untrusted: normalize with realpath and
+    reject any component that would escape the chosen directory (path-injection guard). `name` is always a
+    constant report filename, so this only ever rejects a maliciously crafted --out, never normal use.
+    """
+    base = os.path.realpath(str(out_dir))
+    target = os.path.realpath(os.path.join(base, name))
+    if target != base and not target.startswith(base + os.sep):
+        sys.exit(f"refusing to write outside the output directory: {name}")
+    return Path(target)
 
 
 def cli():
